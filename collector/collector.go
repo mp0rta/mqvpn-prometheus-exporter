@@ -1,0 +1,235 @@
+// Package collector implements the prometheus.Collector for mqvpn metrics.
+//
+// One Collect call performs four mqvpn JSON RPCs: get_build_info (cached
+// 60s), get_stats (server-wide counters + uptime), get_status (per-client +
+// per-path), and get_fec_stats per active user. All metrics are produced as
+// const metrics — no persistent gauges, no scrape-to-scrape state beyond the
+// build_info cache and exporter self-stats.
+package collector
+
+import (
+	"context"
+	"errors"
+	"log"
+	"strconv"
+	"sync"
+	"time"
+
+	"github.com/mp0rta/mqvpn-prometheus-exporter/client"
+	"github.com/prometheus/client_golang/prometheus"
+)
+
+// Source abstracts the mqvpn client for testability.
+type Source interface {
+	GetBuildInfo(ctx context.Context) (*client.BuildInfoResponse, error)
+	GetStats(ctx context.Context) (*client.StatsResponse, error)
+	GetStatus(ctx context.Context) (*client.StatusResponse, error)
+	GetFECStats(ctx context.Context, user string) (*client.FECStatsResponse, error)
+}
+
+type Collector struct {
+	src Source
+
+	// Build info is cached for 60s — version/scheduler don't change mid-run.
+	buildMu sync.Mutex
+	build   *client.BuildInfoResponse
+	buildAt time.Time
+
+	scrapeFailures prometheus.Counter
+	scrapeDuration prometheus.Histogram
+}
+
+func New(src Source) *Collector {
+	return &Collector{
+		src: src,
+		scrapeFailures: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "mqvpn_exporter_scrape_failures_total",
+			Help: "Number of scrape calls to mqvpn that failed.",
+		}),
+		scrapeDuration: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Name: "mqvpn_exporter_scrape_duration_seconds",
+			Help: "Time spent scraping mqvpn for one Prometheus scrape.",
+		}),
+	}
+}
+
+// Describe deliberately emits NOTHING — this is an "unchecked" collector per
+// prometheus/client_golang's model. All metrics are produced via
+// MustNewConstMetric in Collect with stable Descs. This avoids the bookkeeping
+// of mirroring 20+ Descs in two places. scrapeFailures/scrapeDuration are
+// auto-described when emitted via the Counter/Histogram interfaces.
+func (c *Collector) Describe(ch chan<- *prometheus.Desc) {}
+
+var (
+	descServerClients    = prometheus.NewDesc("mqvpn_server_clients", "Number of currently-connected clients.", nil, nil)
+	descServerBytesTx    = prometheus.NewDesc("mqvpn_server_bytes_tx_total", "Bytes the server has sent to clients.", nil, nil)
+	descServerBytesRx    = prometheus.NewDesc("mqvpn_server_bytes_rx_total", "Bytes the server has received from clients.", nil, nil)
+	descServerDgramSent  = prometheus.NewDesc("mqvpn_server_dgram_sent_total", "QUIC datagrams sent.", nil, nil)
+	descServerDgramRecv  = prometheus.NewDesc("mqvpn_server_dgram_recv_total", "QUIC datagrams received.", nil, nil)
+	descServerDgramLost  = prometheus.NewDesc("mqvpn_server_dgram_lost_total", "QUIC datagrams lost (server-observed).", nil, nil)
+	descServerDgramAcked = prometheus.NewDesc("mqvpn_server_dgram_acked_total", "QUIC datagrams acknowledged.", nil, nil)
+	descServerUptime     = prometheus.NewDesc("mqvpn_server_uptime_seconds", "Server uptime in seconds.", nil, nil)
+	descBuildInfo        = prometheus.NewDesc("mqvpn_build_info", "mqvpn build info; value is always 1.", []string{"version", "scheduler"}, nil)
+
+	descClientPaths     = prometheus.NewDesc("mqvpn_client_paths", "Number of paths for this client.", []string{"user"}, nil)
+	descClientBytesTx   = prometheus.NewDesc("mqvpn_client_bytes_tx_total", "Bytes sent to this client.", []string{"user"}, nil)
+	descClientBytesRx   = prometheus.NewDesc("mqvpn_client_bytes_rx_total", "Bytes received from this client.", []string{"user"}, nil)
+	descClientConnected = prometheus.NewDesc("mqvpn_client_connected_seconds", "Seconds since this client connected.", []string{"user"}, nil)
+
+	descClientFECEnabled   = prometheus.NewDesc("mqvpn_client_fec_enabled", "1 if FEC is negotiated.", []string{"user"}, nil)
+	descClientFECSend      = prometheus.NewDesc("mqvpn_client_fec_send_total", "FEC repair packets sent.", []string{"user"}, nil)
+	descClientFECRecover   = prometheus.NewDesc("mqvpn_client_fec_recover_total", "Packets recovered by FEC decoder.", []string{"user"}, nil)
+	descClientLostDgram    = prometheus.NewDesc("mqvpn_client_lost_dgram_total", "Datagrams reported lost.", []string{"user"}, nil)
+	descClientAppBytes     = prometheus.NewDesc("mqvpn_client_app_bytes_total", "Total application bytes carried.", []string{"user"}, nil)
+	descClientStandbyBytes = prometheus.NewDesc("mqvpn_client_standby_app_bytes_total", "Application bytes via the standby path.", []string{"user"}, nil)
+	descClientMPState      = prometheus.NewDesc("mqvpn_client_mp_state", "xquic mp_state.", []string{"user"}, nil)
+
+	descPathSRTT     = prometheus.NewDesc("mqvpn_path_srtt_seconds", "Smoothed RTT.", []string{"user", "path_id"}, nil)
+	descPathMinRTT   = prometheus.NewDesc("mqvpn_path_min_rtt_seconds", "Minimum observed RTT.", []string{"user", "path_id"}, nil)
+	descPathCwnd     = prometheus.NewDesc("mqvpn_path_cwnd_bytes", "Congestion window.", []string{"user", "path_id"}, nil)
+	descPathInFlight = prometheus.NewDesc("mqvpn_path_in_flight_bytes", "Bytes in flight.", []string{"user", "path_id"}, nil)
+	descPathBytesTx  = prometheus.NewDesc("mqvpn_path_bytes_tx_total", "Bytes sent on this path.", []string{"user", "path_id"}, nil)
+	descPathBytesRx  = prometheus.NewDesc("mqvpn_path_bytes_rx_total", "Bytes received on this path.", []string{"user", "path_id"}, nil)
+	descPathPktSent  = prometheus.NewDesc("mqvpn_path_pkt_sent_total", "Packets sent on this path.", []string{"user", "path_id"}, nil)
+	descPathPktRecv  = prometheus.NewDesc("mqvpn_path_pkt_recv_total", "Packets received on this path.", []string{"user", "path_id"}, nil)
+	descPathPktLost  = prometheus.NewDesc("mqvpn_path_pkt_lost_total", "Packets lost on this path.", []string{"user", "path_id"}, nil)
+	descPathState    = prometheus.NewDesc("mqvpn_path_state",
+		"xquic per-path transport state (NOT scheduler logical role; see README).",
+		[]string{"user", "path_id"}, nil)
+)
+
+func (c *Collector) Collect(ch chan<- prometheus.Metric) {
+	t0 := time.Now()
+	// Single deferred block — observe BEFORE emitting the histogram so the
+	// value reflects THIS scrape (not the previous one). LIFO of two defers
+	// would have observed AFTER emit and shipped a stale value.
+	defer func() {
+		c.scrapeDuration.Observe(time.Since(t0).Seconds())
+		ch <- c.scrapeFailures
+		ch <- c.scrapeDuration
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	bi, err := c.cachedBuildInfo(ctx)
+	if err != nil {
+		c.scrapeFailures.Inc()
+		log.Printf("scrape: get_build_info: %v", err)
+		return
+	}
+	ch <- prometheus.MustNewConstMetric(descBuildInfo, prometheus.GaugeValue, 1,
+		bi.Version, bi.Scheduler)
+
+	// Server-wide stats (extended get_stats: dgram_*, uptime).
+	serverStats, err := c.src.GetStats(ctx)
+	if err != nil {
+		c.scrapeFailures.Inc()
+		log.Printf("scrape: get_stats: %v", err)
+		// Continue — we can still report status/fec metrics below.
+	} else {
+		ch <- prometheus.MustNewConstMetric(descServerClients, prometheus.GaugeValue, float64(serverStats.NClients))
+		ch <- prometheus.MustNewConstMetric(descServerBytesTx, prometheus.CounterValue, float64(serverStats.BytesTx))
+		ch <- prometheus.MustNewConstMetric(descServerBytesRx, prometheus.CounterValue, float64(serverStats.BytesRx))
+		ch <- prometheus.MustNewConstMetric(descServerDgramSent, prometheus.CounterValue, float64(serverStats.DgramSent))
+		ch <- prometheus.MustNewConstMetric(descServerDgramRecv, prometheus.CounterValue, float64(serverStats.DgramRecv))
+		ch <- prometheus.MustNewConstMetric(descServerDgramLost, prometheus.CounterValue, float64(serverStats.DgramLost))
+		ch <- prometheus.MustNewConstMetric(descServerDgramAcked, prometheus.CounterValue, float64(serverStats.DgramAcked))
+		ch <- prometheus.MustNewConstMetric(descServerUptime, prometheus.GaugeValue, float64(serverStats.UptimeSec))
+	}
+
+	st, err := c.src.GetStatus(ctx)
+	if err != nil {
+		c.scrapeFailures.Inc()
+		log.Printf("scrape: get_status: %v", err)
+		return
+	}
+	// mqvpn_server_clients was already emitted above via GetStats; if GetStats
+	// had failed we'd have skipped it. GetStatus's NClients should agree.
+
+	fecGloballyUnsupported := false
+	for i := range st.Clients {
+		ci := &st.Clients[i]
+		ch <- prometheus.MustNewConstMetric(descClientPaths, prometheus.GaugeValue,
+			float64(len(ci.Paths)), ci.User)
+		ch <- prometheus.MustNewConstMetric(descClientBytesTx, prometheus.CounterValue,
+			float64(ci.BytesTx), ci.User)
+		ch <- prometheus.MustNewConstMetric(descClientBytesRx, prometheus.CounterValue,
+			float64(ci.BytesRx), ci.User)
+		ch <- prometheus.MustNewConstMetric(descClientConnected, prometheus.GaugeValue,
+			float64(ci.ConnectedSec), ci.User)
+
+		for j := range ci.Paths {
+			p := &ci.Paths[j]
+			pid := strconv.FormatUint(p.PathID, 10)
+			ch <- prometheus.MustNewConstMetric(descPathSRTT, prometheus.GaugeValue,
+				float64(p.SRTTMs)/1000.0, ci.User, pid)
+			ch <- prometheus.MustNewConstMetric(descPathMinRTT, prometheus.GaugeValue,
+				float64(p.MinRTTMs)/1000.0, ci.User, pid)
+			ch <- prometheus.MustNewConstMetric(descPathCwnd, prometheus.GaugeValue,
+				float64(p.Cwnd), ci.User, pid)
+			ch <- prometheus.MustNewConstMetric(descPathInFlight, prometheus.GaugeValue,
+				float64(p.InFlight), ci.User, pid)
+			ch <- prometheus.MustNewConstMetric(descPathBytesTx, prometheus.CounterValue,
+				float64(p.BytesTx), ci.User, pid)
+			ch <- prometheus.MustNewConstMetric(descPathBytesRx, prometheus.CounterValue,
+				float64(p.BytesRx), ci.User, pid)
+			ch <- prometheus.MustNewConstMetric(descPathPktSent, prometheus.CounterValue,
+				float64(p.PktSent), ci.User, pid)
+			ch <- prometheus.MustNewConstMetric(descPathPktRecv, prometheus.CounterValue,
+				float64(p.PktRecv), ci.User, pid)
+			ch <- prometheus.MustNewConstMetric(descPathPktLost, prometheus.CounterValue,
+				float64(p.PktLost), ci.User, pid)
+			ch <- prometheus.MustNewConstMetric(descPathState, prometheus.GaugeValue,
+				float64(p.State), ci.User, pid)
+		}
+
+		// FEC stats — best-effort per user. Once we discover FEC isn't built,
+		// skip FEC for ALL remaining clients in this scrape (don't return —
+		// per-path metrics for them are still wanted).
+		if fecGloballyUnsupported {
+			continue
+		}
+		fec, err := c.src.GetFECStats(ctx, ci.User)
+		switch {
+		case err == nil:
+			ch <- prometheus.MustNewConstMetric(descClientFECEnabled, prometheus.GaugeValue,
+				float64(fec.EnableFEC), ci.User)
+			ch <- prometheus.MustNewConstMetric(descClientFECSend, prometheus.CounterValue,
+				float64(fec.FECSendCnt), ci.User)
+			ch <- prometheus.MustNewConstMetric(descClientFECRecover, prometheus.CounterValue,
+				float64(fec.FECRecoverCnt), ci.User)
+			ch <- prometheus.MustNewConstMetric(descClientLostDgram, prometheus.CounterValue,
+				float64(fec.LostDgramCnt), ci.User)
+			ch <- prometheus.MustNewConstMetric(descClientAppBytes, prometheus.CounterValue,
+				float64(fec.TotalAppBytes), ci.User)
+			ch <- prometheus.MustNewConstMetric(descClientStandbyBytes, prometheus.CounterValue,
+				float64(fec.StandbyAppBytes), ci.User)
+			ch <- prometheus.MustNewConstMetric(descClientMPState, prometheus.GaugeValue,
+				float64(fec.MPState), ci.User)
+		case errors.Is(err, client.ErrUserNotFound):
+			// Race: user disconnected between get_status and get_fec_stats.
+			// Skip silently — Prometheus staleness handles the gap.
+		case errors.Is(err, client.ErrFECNotBuilt):
+			log.Printf("scrape: fec not built in mqvpn; omitting fec metrics for this scrape")
+			fecGloballyUnsupported = true
+		default:
+			c.scrapeFailures.Inc()
+			log.Printf("scrape: get_fec_stats(%q): %v", ci.User, err)
+		}
+	}
+}
+
+func (c *Collector) cachedBuildInfo(ctx context.Context) (*client.BuildInfoResponse, error) {
+	c.buildMu.Lock()
+	defer c.buildMu.Unlock()
+	if c.build != nil && time.Since(c.buildAt) < 60*time.Second {
+		return c.build, nil
+	}
+	b, err := c.src.GetBuildInfo(ctx)
+	if err != nil {
+		return nil, err
+	}
+	c.build, c.buildAt = b, time.Now()
+	return b, nil
+}
