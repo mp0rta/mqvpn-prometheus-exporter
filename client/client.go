@@ -180,8 +180,16 @@ type FECStatsResponse struct {
 // GetFECStats returns ErrUserNotFound or ErrFECNotBuilt for the two known
 // non-OK responses; the collector uses errors.Is to distinguish them.
 func (c *Client) GetFECStats(ctx context.Context, user string) (*FECStatsResponse, error) {
-	req := fmt.Sprintf(`{"cmd":"get_fec_stats","user":%q}`, user)
-	body, err := c.Call(ctx, []byte(req))
+	// Use json.Marshal — NOT fmt.Sprintf %q — for the user value. %q produces
+	// Go-quoted strings that diverge from JSON for non-UTF-8 bytes (e.g. \xff)
+	// which the C server's json_mini.h would misparse, masking real users as
+	// "user not found".
+	userJSON, err := json.Marshal(user)
+	if err != nil {
+		return nil, fmt.Errorf("marshal user: %w", err)
+	}
+	req := []byte(`{"cmd":"get_fec_stats","user":` + string(userJSON) + `}`)
+	body, err := c.Call(ctx, req)
 	if err != nil {
 		return nil, err
 	}

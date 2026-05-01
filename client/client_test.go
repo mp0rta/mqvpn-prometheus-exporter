@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"sync"
 	"testing"
 	"time"
 )
@@ -20,21 +21,38 @@ func startMock(t *testing.T, resp string) (addr string, stop func()) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// We track the accepted connection so stop() can close it. The goroutine
+	// must NOT call any *testing.T method (Log/Logf/Errorf/Fatal) — it can
+	// outlive the test by up to the read deadline, and Go's testing package
+	// panics if t.* is called after the test has finished.
+	var (
+		mu       sync.Mutex
+		accepted net.Conn
+	)
 	go func() {
 		c, err := l.Accept()
 		if err != nil {
 			return
 		}
+		mu.Lock()
+		accepted = c
+		mu.Unlock()
 		defer c.Close()
 		c.SetReadDeadline(time.Now().Add(2 * time.Second))
 		buf := make([]byte, 4096)
 		if _, err := c.Read(buf); err != nil {
-			t.Logf("mock read: %v", err)
-			return
+			return // drop the error; t may already be dead
 		}
 		c.Write([]byte(resp))
 	}()
-	return l.Addr().String(), func() { l.Close() }
+	return l.Addr().String(), func() {
+		l.Close()
+		mu.Lock()
+		if accepted != nil {
+			accepted.Close()
+		}
+		mu.Unlock()
+	}
 }
 
 func TestGetBuildInfo_OK(t *testing.T) {
