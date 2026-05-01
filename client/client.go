@@ -82,6 +82,80 @@ func (c *Client) GetBuildInfo(ctx context.Context) (*BuildInfoResponse, error) {
 	return &r, nil
 }
 
+// PathStats — see mqvpn/docs/control-api.md §5 get_status, paths array.
+type PathStats struct {
+	PathID   uint64 `json:"path_id"`
+	SRTTMs   uint64 `json:"srtt_ms"`
+	MinRTTMs uint64 `json:"min_rtt_ms"`
+	Cwnd     uint64 `json:"cwnd"`
+	InFlight uint64 `json:"in_flight"`
+	BytesTx  uint64 `json:"bytes_tx"`
+	BytesRx  uint64 `json:"bytes_rx"`
+	PktSent  uint64 `json:"pkt_sent"`
+	PktRecv  uint64 `json:"pkt_recv"`
+	PktLost  uint64 `json:"pkt_lost"`
+	State    uint8  `json:"state"`
+}
+
+type ClientInfo struct {
+	User         string      `json:"user"`
+	Endpoint     string      `json:"endpoint"`
+	ConnectedSec uint64      `json:"connected_sec"`
+	BytesTx      uint64      `json:"bytes_tx"`
+	BytesRx      uint64      `json:"bytes_rx"`
+	Paths        []PathStats `json:"paths"`
+}
+
+type StatusResponse struct {
+	baseResponse
+	NClients int          `json:"n_clients"`
+	Clients  []ClientInfo `json:"clients"`
+}
+
+func (c *Client) GetStatus(ctx context.Context) (*StatusResponse, error) {
+	body, err := c.Call(ctx, []byte(`{"cmd":"get_status"}`))
+	if err != nil {
+		return nil, err
+	}
+	var r StatusResponse
+	if err := json.Unmarshal(body, &r); err != nil {
+		return nil, fmt.Errorf("parse get_status response: %w (body=%q)", err, body)
+	}
+	if !r.OK {
+		return nil, fmt.Errorf("server error: %s", r.Error)
+	}
+	return &r, nil
+}
+
+// StatsResponse — see mqvpn/docs/control-api.md §5 get_stats. The schema was
+// extended in mqvpn v0.4.0 with dgram_*/uptime_sec; old fields keep position.
+type StatsResponse struct {
+	baseResponse
+	NClients   int    `json:"n_clients"`
+	BytesTx    uint64 `json:"bytes_tx"`
+	BytesRx    uint64 `json:"bytes_rx"`
+	DgramSent  uint64 `json:"dgram_sent"`
+	DgramRecv  uint64 `json:"dgram_recv"`
+	DgramLost  uint64 `json:"dgram_lost"`
+	DgramAcked uint64 `json:"dgram_acked"`
+	UptimeSec  uint64 `json:"uptime_sec"`
+}
+
+func (c *Client) GetStats(ctx context.Context) (*StatsResponse, error) {
+	body, err := c.Call(ctx, []byte(`{"cmd":"get_stats"}`))
+	if err != nil {
+		return nil, err
+	}
+	var r StatsResponse
+	if err := json.Unmarshal(body, &r); err != nil {
+		return nil, fmt.Errorf("parse get_stats response: %w (body=%q)", err, body)
+	}
+	if !r.OK {
+		return nil, fmt.Errorf("server error: %s", r.Error)
+	}
+	return &r, nil
+}
+
 // ErrUserNotFound and ErrFECNotBuilt are sentinel errors returned by
 // GetFECStats so the collector can distinguish per-user race conditions
 // (disconnected mid-scrape) from server-wide build flag absence.
