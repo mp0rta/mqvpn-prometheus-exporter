@@ -163,3 +163,41 @@ var (
 	ErrUserNotFound = errors.New("user not found")
 	ErrFECNotBuilt  = errors.New("fec not built")
 )
+
+// FECStatsResponse — see mqvpn/docs/control-api.md §5 get_fec_stats.
+type FECStatsResponse struct {
+	baseResponse
+	User            string `json:"user"`
+	EnableFEC       uint8  `json:"enable_fec"`
+	MPState         uint8  `json:"mp_state"`
+	FECSendCnt      uint64 `json:"fec_send_cnt"`
+	FECRecoverCnt   uint64 `json:"fec_recover_cnt"`
+	LostDgramCnt    uint64 `json:"lost_dgram_cnt"`
+	TotalAppBytes   uint64 `json:"total_app_bytes"`
+	StandbyAppBytes uint64 `json:"standby_app_bytes"`
+}
+
+// GetFECStats returns ErrUserNotFound or ErrFECNotBuilt for the two known
+// non-OK responses; the collector uses errors.Is to distinguish them.
+func (c *Client) GetFECStats(ctx context.Context, user string) (*FECStatsResponse, error) {
+	req := fmt.Sprintf(`{"cmd":"get_fec_stats","user":%q}`, user)
+	body, err := c.Call(ctx, []byte(req))
+	if err != nil {
+		return nil, err
+	}
+	var r FECStatsResponse
+	if err := json.Unmarshal(body, &r); err != nil {
+		return nil, fmt.Errorf("parse get_fec_stats response: %w (body=%q)", err, body)
+	}
+	if !r.OK {
+		switch r.Error {
+		case "user not found":
+			return nil, ErrUserNotFound
+		case "fec not built":
+			return nil, ErrFECNotBuilt
+		default:
+			return nil, fmt.Errorf("server error: %s", r.Error)
+		}
+	}
+	return &r, nil
+}

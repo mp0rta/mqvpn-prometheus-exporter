@@ -112,6 +112,38 @@ func TestGetStats_OK(t *testing.T) {
 	}
 }
 
-// Note: errors import is here for B1.5's tests (using errors.Is on sentinel
-// errors). Keeping it in this initial commit avoids gratuitous churn.
-var _ = errors.Is
+func TestGetFECStats_OK(t *testing.T) {
+	resp := `{"ok":true,"user":"alice","enable_fec":1,"mp_state":1,
+             "fec_send_cnt":142,"fec_recover_cnt":17,"lost_dgram_cnt":23,
+             "total_app_bytes":9123456,"standby_app_bytes":421337}`
+	addr, stop := startMock(t, resp)
+	defer stop()
+	c := New(addr, 2*time.Second)
+	r, err := c.GetFECStats(context.Background(), "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.FECSendCnt != 142 || r.FECRecoverCnt != 17 {
+		t.Errorf("counters: %+v", r)
+	}
+}
+
+func TestGetFECStats_UserNotFound(t *testing.T) {
+	addr, stop := startMock(t, `{"ok":false,"error":"user not found"}`)
+	defer stop()
+	c := New(addr, 2*time.Second)
+	_, err := c.GetFECStats(context.Background(), "ghost")
+	if !errors.Is(err, ErrUserNotFound) {
+		t.Errorf("got %v", err)
+	}
+}
+
+func TestGetFECStats_FECNotBuilt(t *testing.T) {
+	addr, stop := startMock(t, `{"ok":false,"error":"fec not built"}`)
+	defer stop()
+	c := New(addr, 2*time.Second)
+	_, err := c.GetFECStats(context.Background(), "alice")
+	if !errors.Is(err, ErrFECNotBuilt) {
+		t.Errorf("got %v", err)
+	}
+}
