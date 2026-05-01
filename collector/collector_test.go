@@ -2,7 +2,6 @@ package collector
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"testing"
 
@@ -139,5 +138,4 @@ func TestCollect_UserNotFound_SkipsThatUserOnly(t *testing.T) {
 	if n != 1 {
 		t.Errorf("expected 1 fec_send_total sample (bob only), got %d", n)
 	}
-	_ = errors.Is // keep import live for future expansion
 }
