@@ -1,0 +1,18 @@
+[Unit]
+Description=mqvpn Prometheus Exporter
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/mqvpn-prometheus-exporter \
+    --mqvpn.address 127.0.0.1:9090 \
+    --web.listen-address 127.0.0.1:9091
+Restart=on-failure
+RestartSec=2
+DynamicUser=yes
+ProtectSystem=strict
+PrivateTmp=yes
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target
