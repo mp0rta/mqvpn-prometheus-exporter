@@ -28,8 +28,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-          check-latest: true
       - name: install gitleaks
-        run: go install github.com/zricethezav/gitleaks/v8@latest
+        run: go install github.com/zricethezav/gitleaks/v8@v8.30.1
       - name: scan history for secrets
-        run: gitleaks detect --source . --redact --verbose --no-banner
+        run: gitleaks git --redact --verbose --no-banner --platform github .
