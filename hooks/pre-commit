@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Scan staged changes for secrets before allowing the commit.
+# Install gitleaks: go install github.com/zricethezav/gitleaks/v8@latest
+set -euo pipefail
+
+if ! command -v gitleaks >/dev/null 2>&1; then
+    echo "pre-commit: gitleaks not found in PATH." >&2
+    echo "  Install: go install github.com/zricethezav/gitleaks/v8@latest" >&2
+    echo "  (ensure \$(go env GOBIN) or \$(go env GOPATH)/bin is on PATH)" >&2
+    exit 1
+fi
+
+gitleaks protect --staged --redact --verbose
