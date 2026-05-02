@@ -24,7 +24,7 @@ Open `http://127.0.0.1:9091/metrics` to verify output.
 |------|---------|-------------|
 | `--web.listen-address` | `127.0.0.1:9091` | Address on which to expose `/metrics`. Defaults to loopback. Set to `0.0.0.0:9091` to expose externally — you MUST front with nginx for authentication (see Section 9). |
 | `--mqvpn.address` | `127.0.0.1:9090` | mqvpn control API address (`host:port`). Must be reachable from the exporter process. |
-| `--mqvpn.timeout` | `5s` | Per-RPC timeout when calling mqvpn. Each Prometheus scrape makes up to `1 + N_clients` RPCs (build_info cached 60s, get_stats, get_status, get_fec_stats per client). |
+| `--mqvpn.timeout` | `5s` | Per-RPC timeout when calling mqvpn. Each Prometheus scrape makes up to `1 + N_clients` RPCs (build_info cached 60s, get_stats, get_status, get_fec_stats per client). **Note:** there is also a hardcoded **10-second total budget** for one scrape (sum of all RPCs). With many clients × `--mqvpn.timeout` close to the budget, the tail of the per-user FEC calls may silently fail; reduce `--mqvpn.timeout` accordingly. The 10s cap is intentional to prevent a single slow scrape from queueing behind the next Prometheus scrape interval. |
 
 ---
 
