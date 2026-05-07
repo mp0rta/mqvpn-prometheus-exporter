@@ -1,3 +1,7 @@
+// Command mqvpn-prometheus-exporter is a sidecar Prometheus exporter for the
+// mqvpn multipath QUIC VPN server. It polls mqvpn's JSON control API and
+// exposes /metrics in Prometheus exposition format. See docs/README.md for
+// the operator guide and exposed metric reference.
 package main
 
 import (
@@ -15,7 +19,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-const exporterVersion = "0.1.0"
+// exporterVersion is overridden at build time via -ldflags "-X main.exporterVersion=..."
+// (see .goreleaser.yaml). Default reflects the current source-of-truth version.
+var exporterVersion = "0.1.0"
 
 func main() {
 	var (
@@ -62,15 +68,15 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintln(w, "ok")
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprintln(w, "ok")
 	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
 			return
 		}
-		fmt.Fprintf(w, "mqvpn-prometheus-exporter %s\n\nSee /metrics, /healthz\n", exporterVersion)
+		_, _ = fmt.Fprintf(w, "mqvpn-prometheus-exporter %s\n\nSee /metrics, /healthz\n", exporterVersion)
 	})
 
 	log.Printf("listening on %s, scraping mqvpn at %s (timeout=%s)",

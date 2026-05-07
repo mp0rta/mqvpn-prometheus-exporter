@@ -19,24 +19,24 @@ type fakeClient struct {
 	fecErr error
 }
 
-func (f *fakeClient) GetBuildInfo(ctx context.Context) (*client.BuildInfoResponse, error) {
+func (f *fakeClient) GetBuildInfo(_ context.Context) (*client.BuildInfoResponse, error) {
 	return f.build, nil
 }
 
 // Defensive zero-default: tests that don't care about server-wide stats can
 // leave f.stats nil.
-func (f *fakeClient) GetStats(ctx context.Context) (*client.StatsResponse, error) {
+func (f *fakeClient) GetStats(_ context.Context) (*client.StatsResponse, error) {
 	if f.stats == nil {
 		return &client.StatsResponse{}, nil
 	}
 	return f.stats, nil
 }
 
-func (f *fakeClient) GetStatus(ctx context.Context) (*client.StatusResponse, error) {
+func (f *fakeClient) GetStatus(_ context.Context) (*client.StatusResponse, error) {
 	return f.status, nil
 }
 
-func (f *fakeClient) GetAllFECStats(ctx context.Context) (*client.AllFECStatsResponse, error) {
+func (f *fakeClient) GetAllFECStats(_ context.Context) (*client.AllFECStatsResponse, error) {
 	if f.fecErr != nil {
 		return nil, f.fecErr
 	}
@@ -53,7 +53,7 @@ func TestCollect_HappyPath(t *testing.T) {
 		},
 		status: &client.StatusResponse{
 			NClients: 1,
-			Clients: []client.ClientInfo{{
+			Clients: []client.Info{{
 				User: "alice", Endpoint: "1.2.3.4:443",
 				ConnectedSec: 42, BytesTx: 1000, BytesRx: 2000,
 				Paths: []client.PathStats{{
@@ -119,7 +119,7 @@ func TestCollect_FECNotBuilt_OmitsFECMetrics(t *testing.T) {
 		build: &client.BuildInfoResponse{Version: "0.5.0", Scheduler: "wlb", FECEnabled: 0},
 		status: &client.StatusResponse{
 			NClients: 1,
-			Clients:  []client.ClientInfo{{User: "alice", Paths: []client.PathStats{}}},
+			Clients:  []client.Info{{User: "alice", Paths: []client.PathStats{}}},
 		},
 		fecErr: client.ErrFECNotBuilt,
 	}
@@ -151,7 +151,7 @@ func TestCollect_BulkRaceUserMissing_SkipsThatUserOnly(t *testing.T) {
 		build: &client.BuildInfoResponse{Version: "0.5.0", Scheduler: "wlb", FECEnabled: 1},
 		status: &client.StatusResponse{
 			NClients: 2,
-			Clients: []client.ClientInfo{
+			Clients: []client.Info{
 				{User: "alice", Paths: nil},
 				{User: "bob", Paths: nil},
 			},
@@ -182,7 +182,7 @@ func TestCollect_IncludeEndpoint_OptIn(t *testing.T) {
 			build: &client.BuildInfoResponse{Version: "0.5.0", Scheduler: "wlb", FECEnabled: 0},
 			status: &client.StatusResponse{
 				NClients: 1,
-				Clients: []client.ClientInfo{{
+				Clients: []client.Info{{
 					User: "alice", Endpoint: "1.2.3.4:443", Paths: nil,
 				}},
 			},
@@ -253,7 +253,7 @@ func TestCollect_PathStateLabel_EmptyFallsBackToUnknown(t *testing.T) {
 		fecErr: client.ErrFECNotBuilt,
 		status: &client.StatusResponse{
 			NClients: 1,
-			Clients: []client.ClientInfo{{
+			Clients: []client.Info{{
 				User: "alice",
 				Paths: []client.PathStats{
 					{PathID: 0, State: 2, StateLabel: ""},
@@ -285,7 +285,7 @@ func TestCollect_IncludeEndpoint_EmptyEndpointSkipsEmit(t *testing.T) {
 		fecErr: client.ErrFECNotBuilt,
 		status: &client.StatusResponse{
 			NClients: 1,
-			Clients:  []client.ClientInfo{{User: "alice", Endpoint: "", Paths: nil}},
+			Clients:  []client.Info{{User: "alice", Endpoint: "", Paths: nil}},
 		},
 	}
 	coll := New(Config{Source: fc, IncludeEndpoint: true})

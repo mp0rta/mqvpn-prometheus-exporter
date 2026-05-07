@@ -17,11 +17,16 @@ import (
 	"time"
 )
 
+// Client is a JSON-over-TCP roundtripper for the mqvpn control API.
+// Safe for concurrent use; each call opens a fresh connection.
 type Client struct {
 	addr    string
 	timeout time.Duration
 }
 
+// New returns a Client that talks to the mqvpn control API at addr.
+// timeout applies to both connection establishment and the per-call
+// read/write deadline.
 func New(addr string, timeout time.Duration) *Client {
 	return &Client{addr: addr, timeout: timeout}
 }
@@ -36,7 +41,7 @@ func (c *Client) Call(ctx context.Context, req []byte) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("dial mqvpn control API at %s: %w", c.addr, err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	deadline := time.Now().Add(c.timeout)
 	if dl, ok := ctx.Deadline(); ok && dl.Before(deadline) {
@@ -67,6 +72,8 @@ type BuildInfoResponse struct {
 	FECEnabled int    `json:"fec_enabled"`
 }
 
+// GetBuildInfo issues the get_build_info RPC. Callers typically cache the
+// result for ~60s since version/scheduler don't change at runtime.
 func (c *Client) GetBuildInfo(ctx context.Context) (*BuildInfoResponse, error) {
 	body, err := c.Call(ctx, []byte(`{"cmd":"get_build_info"}`))
 	if err != nil {
@@ -100,7 +107,11 @@ type PathStats struct {
 	StateLabel string `json:"state_label"`
 }
 
-type ClientInfo struct {
+// Info is one element of StatusResponse.Clients — a per-session snapshot
+// of a connected mqvpn user's TUN-byte counters and active paths. mqvpn's
+// JSON nomenclature calls these "clients"; the Go type name avoids
+// stuttering as client.Client*.
+type Info struct {
 	User         string      `json:"user"`
 	Endpoint     string      `json:"endpoint"`
 	ConnectedSec uint64      `json:"connected_sec"`
@@ -109,12 +120,15 @@ type ClientInfo struct {
 	Paths        []PathStats `json:"paths"`
 }
 
+// StatusResponse — see mqvpn/docs/control-api.md §5 get_status.
 type StatusResponse struct {
 	baseResponse
-	NClients int          `json:"n_clients"`
-	Clients  []ClientInfo `json:"clients"`
+	NClients int    `json:"n_clients"`
+	Clients  []Info `json:"clients"`
 }
 
+// GetStatus issues the get_status RPC, returning the per-client and per-path
+// snapshot for every active session.
 func (c *Client) GetStatus(ctx context.Context) (*StatusResponse, error) {
 	body, err := c.Call(ctx, []byte(`{"cmd":"get_status"}`))
 	if err != nil {
@@ -144,6 +158,8 @@ type StatsResponse struct {
 	UptimeSec  uint64 `json:"uptime_sec"`
 }
 
+// GetStats issues the get_stats RPC, returning server-wide counters
+// (bytes_tx/rx, datagram counters, uptime).
 func (c *Client) GetStats(ctx context.Context) (*StatsResponse, error) {
 	body, err := c.Call(ctx, []byte(`{"cmd":"get_stats"}`))
 	if err != nil {

@@ -38,6 +38,9 @@ type Config struct {
 	IncludeEndpoint bool
 }
 
+// Collector implements prometheus.Collector for mqvpn metrics. Each Collect
+// call performs a fixed set of mqvpn RPCs and emits const metrics; the only
+// in-process state is the build_info cache and the exporter self-stats.
 type Collector struct {
 	src             Source
 	budget          time.Duration
@@ -58,6 +61,9 @@ type Collector struct {
 // (15s) so a slow mqvpn cannot queue scrapes against each other.
 const DefaultScrapeBudget = 10 * time.Second
 
+// New constructs a Collector from cfg. Budget <= 0 falls back to
+// DefaultScrapeBudget. The returned Collector must be registered with a
+// prometheus.Registerer before use.
 func New(cfg Config) *Collector {
 	budget := cfg.Budget
 	if budget <= 0 {
@@ -88,7 +94,7 @@ func New(cfg Config) *Collector {
 // of mirroring 20+ Descs in two places. scrapesTotal/scrapeFailures/
 // scrapeDuration are auto-described when emitted via the Counter/Histogram
 // interfaces.
-func (c *Collector) Describe(ch chan<- *prometheus.Desc) {}
+func (c *Collector) Describe(_ chan<- *prometheus.Desc) {}
 
 var (
 	descServerClients    = prometheus.NewDesc("mqvpn_server_clients", "Number of currently-connected clients.", nil, nil)
@@ -133,6 +139,10 @@ var (
 		[]string{"user", "path_id", "state"}, nil)
 )
 
+// Collect performs one scrape against mqvpn (build_info / stats / status /
+// all_fec_stats) and emits the corresponding const metrics on ch. Failed
+// RPCs increment scrapeFailures and log the cause; a partial scrape still
+// emits whatever it could collect.
 func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	t0 := time.Now()
 	// Single deferred block — observe BEFORE emitting the histogram so the

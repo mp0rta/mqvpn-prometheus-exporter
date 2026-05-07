@@ -37,19 +37,19 @@ func startMock(t *testing.T, resp string) (addr string, stop func()) {
 		mu.Lock()
 		accepted = c
 		mu.Unlock()
-		defer c.Close()
-		c.SetReadDeadline(time.Now().Add(2 * time.Second))
+		defer func() { _ = c.Close() }()
+		_ = c.SetReadDeadline(time.Now().Add(2 * time.Second))
 		buf := make([]byte, 4096)
 		if _, err := c.Read(buf); err != nil {
 			return // drop the error; t may already be dead
 		}
-		c.Write([]byte(resp))
+		_, _ = c.Write([]byte(resp))
 	}()
 	return l.Addr().String(), func() {
-		l.Close()
+		_ = l.Close()
 		mu.Lock()
 		if accepted != nil {
-			accepted.Close()
+			_ = accepted.Close()
 		}
 		mu.Unlock()
 	}
