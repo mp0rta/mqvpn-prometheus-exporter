@@ -45,8 +45,13 @@ go install github.com/mp0rta/mqvpn-prometheus-exporter@latest
 mqvpn-prometheus-exporter --mqvpn.address 127.0.0.1:9090 --web.listen-address 127.0.0.1:9091
 ```
 
-Open `http://127.0.0.1:9091/metrics` to verify output. For a managed
-deployment under systemd or `docker compose`, jump to §4.
+Open `http://127.0.0.1:9091/metrics` to verify output.
+
+> **Want exporter + Prometheus + Grafana in one command?** Skip §1.2 and
+> use the bundled docker compose stack at
+> [`examples/compose/`](../examples/compose/README.md) — pre-provisioned
+> datasource, auto-loaded dashboard, healthchecks. See §4.5 for the
+> rationale and tradeoffs versus the systemd setup in §4.2.
 
 ---
 
