@@ -40,16 +40,14 @@ snapshot:
   version_template: "{{ incpatch .Version }}-next"
 
 changelog:
-  sort: asc
-  use: github
-  filters:
-    exclude:
-      - "^docs:"
-      - "^test:"
-      - "^chore:"
-      - "^ci:"
-      - "Merge pull request"
+  # Annotated tags carry hand-written release notes; the per-commit
+  # auto-changelog goreleaser would generate from `git log` is noisier
+  # and duplicates that prose. Skip it and let the tag message stand.
+  disable: true
 
 release:
   draft: false
   prerelease: auto
+  # Don't overwrite an existing release body if one was already written
+  # (manually via web UI, or by the `gh release create` step in CI).
+  mode: keep-existing
