@@ -8,13 +8,45 @@ multipath QUIC VPN server. Polls mqvpn's JSON control API and exposes
 
 ## 1. Quickstart
 
+### 1.1 Start mqvpn server (with control API enabled)
+
+The exporter only requires that mqvpn's control API is reachable at the
+address you pass via `--mqvpn.address`. Pick whichever launch method fits
+your existing setup; the canonical reference is the
+[mqvpn README](https://github.com/mp0rta/mqvpn/blob/main/README.md).
+
+```bash
+# Install script — sets up config + cert + auth key, optionally starts the server.
+# Pass --enable-control <port> to bind the control API (default port 9090).
+curl -fsSL https://github.com/mp0rta/mqvpn/releases/latest/download/install.sh \
+  | sudo bash -s -- --start --enable-control 9090
+
+# Config file (INI) — add `Listen = 127.0.0.1:9090` under [Control], then:
+sudo mqvpn --config /etc/mqvpn/server.conf
+
+# Config file (JSON) — set `"control_listen": "127.0.0.1:9090"`, then:
+sudo mqvpn --config /etc/mqvpn/server.json
+
+# systemd — assumes /etc/mqvpn/server.conf exists with [Control] configured.
+sudo systemctl enable --now mqvpn-server
+
+# Direct CLI — useful for ad-hoc tests; the control API is off unless you ask.
+sudo mqvpn --mode server --control-port 9090 --control-addr 127.0.0.1 ...
+```
+
+The control API is **disabled** by default; without one of the above
+flags / config keys the exporter will fail every scrape with "connection
+refused".
+
+### 1.2 Run the exporter
+
 ```bash
 go install github.com/mp0rta/mqvpn-prometheus-exporter@latest
-mqvpn --mode server --control-port 9090 ...   # start mqvpn first
 mqvpn-prometheus-exporter --mqvpn.address 127.0.0.1:9090 --web.listen-address 127.0.0.1:9091
 ```
 
-Open `http://127.0.0.1:9091/metrics` to verify output.
+Open `http://127.0.0.1:9091/metrics` to verify output. For a managed
+deployment under systemd or `docker compose`, jump to §4.
 
 ---
 

@@ -33,8 +33,11 @@ on `127.0.0.1:9090`.
 ## Quickstart
 
 ```bash
-# 1. on the VPN host: start mqvpn (control API on 127.0.0.1:9090)
-mqvpn --mode server --control-port 9090 ...
+# 1. on the VPN host: ensure mqvpn is running with its control API on
+#    127.0.0.1:9090. Any launch method works (install script, INI/JSON
+#    config file, systemd, or direct CLI) — see docs/README.md §1.1 or
+#    the upstream mqvpn README. The control API is off by default; you
+#    must enable it explicitly.
 
 # 2. start the full stack (builds the exporter image on first run)
 cd examples/compose
