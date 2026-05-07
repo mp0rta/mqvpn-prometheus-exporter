@@ -30,7 +30,7 @@ jobs:
         with:
           go-version-file: go.mod
           check-latest: true
-      - uses: golangci/golangci-lint-action@v7
+      - uses: golangci/golangci-lint-action@v9
         with:
           # v2.1.6 was built with go1.24 and refuses to load configs that
           # target a higher toolchain. v2.12.2 is built with go1.26.2 and
