@@ -32,7 +32,10 @@ jobs:
           check-latest: true
       - uses: golangci/golangci-lint-action@v7
         with:
-          version: v2.1.6
+          # v2.1.6 was built with go1.24 and refuses to load configs that
+          # target a higher toolchain. v2.12.2 is built with go1.26.2 and
+          # handles our toolchain go1.26.2 directive.
+          version: v2.12.2
 
   vuln:
     runs-on: ubuntu-latest
