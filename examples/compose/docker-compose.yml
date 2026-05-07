@@ -1,0 +1,104 @@
+# Self-host Prometheus + Grafana stack for mqvpn-prometheus-exporter.
+#
+# Linux-only: relies on `network_mode: host` so containers share the host's
+# loopback. Both Prometheus and Grafana bind to 127.0.0.1 (not 0.0.0.0); access
+# Grafana via SSH tunnel as described in docs/README.md §4.3.
+#
+# What this stack does NOT include: mqvpn itself. Run mqvpn on the host with
+# its control API on 127.0.0.1:9090, then:
+#   docker compose up -d --build
+#   ssh -L 3000:127.0.0.1:3000 vpn-host   # from your laptop
+#   # browse http://localhost:3000  (admin / admin)
+#
+# This stack is suitable for personal self-host production as well as
+# development. See README.md for patching cadence and state-wipe semantics
+# (down -v drops Prometheus tsdb + Grafana state — only run intentionally).
+
+services:
+  # One-shot init: copies the bundled dashboard into a volume, substituting
+  # the ${DS_PROMETHEUS} input placeholder with the provisioned datasource UID
+  # ("prometheus"). Without this, Grafana provisioning fails with
+  # "Datasource named ${DS_PROMETHEUS} was not found".
+  dashboards-init:
+    image: busybox:1.36
+    # $$ escapes compose's own variable interpolation so the literal string
+    # ${DS_PROMETHEUS} reaches sed (where the single quotes keep the shell
+    # from expanding it as a parameter).
+    entrypoint: ["sh", "-c"]
+    command:
+      - >
+        sed 's|$${DS_PROMETHEUS}|prometheus|g' /input/mqvpn-grafana.json > /output/mqvpn.json
+    volumes:
+      - ../../dashboards:/input:ro
+      - grafana-dashboards:/output
+    restart: "no"
+
+  exporter:
+    build:
+      # Build from the repo root so go.mod / source are in scope.
+      context: ../..
+      dockerfile: examples/compose/Dockerfile
+    image: mqvpn-prometheus-exporter:local
+    network_mode: host
+    command:
+      - --web.listen-address=127.0.0.1:9091
+      - --mqvpn.address=127.0.0.1:9090
+    restart: unless-stopped
+    # No healthcheck: distroless has no shell, wget, or curl, and the exporter
+    # binary has no self-probe mode. Prometheus's `up{job="mqvpn"}` metric
+    # plus restart: unless-stopped covers the gap — if the process dies
+    # docker restarts it, and if it's stuck up{} drops to 0 in Grafana.
+
+  prometheus:
+    image: prom/prometheus:v3.11.3
+    network_mode: host
+    depends_on:
+      exporter:
+        condition: service_started
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --web.listen-address=127.0.0.1:9092
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=24h
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:9092/-/healthy"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  grafana:
+    image: grafana/grafana:13.0.1
+    network_mode: host
+    depends_on:
+      dashboards-init:
+        condition: service_completed_successfully
+      prometheus:
+        condition: service_started
+    environment:
+      # Bind to loopback only; reach via SSH tunnel.
+      GF_SERVER_HTTP_ADDR: 127.0.0.1
+      GF_SERVER_HTTP_PORT: "3000"
+      # Disable anonymous telemetry / update checks; anonymous access stays off.
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana-dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  prometheus-data:
+  grafana-data:
+  grafana-dashboards:

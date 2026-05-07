@@ -1,0 +1,17 @@
+apiVersion: 1
+
+providers:
+  - name: mqvpn
+    orgId: 1
+    folder: ""
+    type: file
+    disableDeletion: false
+    # Allow UI edits — convenient for ad-hoc tweaks during incidents. Note
+    # that recreating the grafana-dashboards volume (e.g. docker compose
+    # down -v) reverts to the provisioned source. Push changes back to
+    # dashboards/mqvpn-grafana.json in git to make them durable.
+    allowUiUpdates: true
+    options:
+      # Populated by the dashboards-init service (see docker-compose.yml).
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

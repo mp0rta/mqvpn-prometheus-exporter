@@ -142,6 +142,32 @@ In Grafana → **Connections → Data sources → Add data source → Prometheus
 set the URL to `http://127.0.0.1:9092` (the loopback Prometheus from §4.1).
 Save & test, then proceed to §5 to import the bundled dashboard.
 
+### 4.5 Compose stack (alternative)
+
+[`examples/compose/`](../examples/compose/README.md) ships a Linux-only
+`docker compose` stack that brings up the exporter (built from this
+repo), Prometheus, and Grafana with `network_mode: host` (so they reach
+mqvpn's host-loopback control API directly), pre-provisions the
+datasource, auto-loads the bundled dashboard, and includes healthchecks.
+mqvpn itself stays on the host — it's a VPN server with `CAP_NET_ADMIN`
+/ TUN requirements and is out of scope for containerisation.
+
+This is a peer alternative to the systemd setup in §4.2; both bind every
+service to loopback. Pick compose for configuration-as-code, easy
+host-to-host portability, and dependabot-driven image updates; pick
+systemd if you don't want a Docker daemon on the host or prefer distro
+packages with `unattended-upgrades`.
+
+```bash
+cd examples/compose
+docker compose up -d --build
+ssh -L 3000:127.0.0.1:3000 vpn-host
+```
+
+When iterating on exporter source, you can omit the exporter container
+and run `go run .` on the host — see `examples/compose/README.md` for
+that mode plus update / wipe / backup operations.
+
 ---
 
 ## 5. Grafana Dashboard

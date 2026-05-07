@@ -1,0 +1,15 @@
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    # network_mode: host — Grafana shares the host's loopback, so 127.0.0.1
+    # here is the same Prometheus the prometheus service is binding.
+    url: http://127.0.0.1:9092
+    # UID is referenced by the dashboard (dashboards-init sed-substitutes
+    # ${DS_PROMETHEUS} -> "prometheus" before Grafana loads it). Keep these in
+    # sync if you rename either.
+    uid: prometheus
+    isDefault: true
+    editable: false

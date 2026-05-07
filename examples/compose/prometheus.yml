@@ -1,0 +1,14 @@
+# Prometheus config for the debug compose stack.
+# Scrapes the exporter on host loopback (network_mode: host).
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: mqvpn
+    static_configs:
+      - targets: ['127.0.0.1:9091']
+
+  # Self-scrape so you can see Prometheus's own health alongside mqvpn.
+  - job_name: prometheus
+    static_configs:
+      - targets: ['127.0.0.1:9092']
