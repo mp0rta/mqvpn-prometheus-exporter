@@ -159,32 +159,13 @@ func (c *Client) GetStats(ctx context.Context) (*StatsResponse, error) {
 	return &r, nil
 }
 
-// ErrUserNotFound and ErrFECNotBuilt are sentinel errors returned by
-// GetFECStats so the collector can distinguish per-user race conditions
-// (disconnected mid-scrape) from server-wide build flag absence.
-var (
-	ErrUserNotFound = errors.New("user not found")
-	ErrFECNotBuilt  = errors.New("fec not built")
-)
+// ErrFECNotBuilt is the sentinel for the documented "fec not built" failure
+// of GetAllFECStats — surfaced so the collector can drop FEC metrics for
+// the rest of the scrape rather than emitting a per-call error log line.
+var ErrFECNotBuilt = errors.New("fec not built")
 
-// FECStatsResponse — see mqvpn/docs/control-api.md §5 get_fec_stats.
-// `MPStateLabel` was added in mqvpn v0.5.0; older servers do not return it
-// and the field decodes to the empty string.
-type FECStatsResponse struct {
-	baseResponse
-	User            string `json:"user"`
-	EnableFEC       uint8  `json:"enable_fec"`
-	MPState         uint8  `json:"mp_state"`
-	MPStateLabel    string `json:"mp_state_label"`
-	FECSendCnt      uint64 `json:"fec_send_cnt"`
-	FECRecoverCnt   uint64 `json:"fec_recover_cnt"`
-	LostDgramCnt    uint64 `json:"lost_dgram_cnt"`
-	TotalAppBytes   uint64 `json:"total_app_bytes"`
-	StandbyAppBytes uint64 `json:"standby_app_bytes"`
-}
-
-// FECStatsEntry is one element of AllFECStatsResponse.Users — same shape as
-// FECStatsResponse minus the {ok,error} envelope.
+// FECStatsEntry is one element of AllFECStatsResponse.Clients — the canonical
+// per-user FEC + multipath snapshot returned by mqvpn's bulk get_all_fec_stats.
 type FECStatsEntry struct {
 	User            string `json:"user"`
 	EnableFEC       uint8  `json:"enable_fec"`
@@ -225,39 +206,6 @@ func (c *Client) GetAllFECStats(ctx context.Context) (*AllFECStatsResponse, erro
 			return nil, ErrFECNotBuilt
 		}
 		return nil, fmt.Errorf("server error: %s", r.Error)
-	}
-	return &r, nil
-}
-
-// GetFECStats returns ErrUserNotFound or ErrFECNotBuilt for the two known
-// non-OK responses; the collector uses errors.Is to distinguish them.
-func (c *Client) GetFECStats(ctx context.Context, user string) (*FECStatsResponse, error) {
-	// Use json.Marshal — NOT fmt.Sprintf %q — for the user value. %q produces
-	// Go-quoted strings that diverge from JSON for non-UTF-8 bytes (e.g. \xff)
-	// which the C server's json_mini.h would misparse, masking real users as
-	// "user not found".
-	userJSON, err := json.Marshal(user)
-	if err != nil {
-		return nil, fmt.Errorf("marshal user: %w", err)
-	}
-	req := []byte(`{"cmd":"get_fec_stats","user":` + string(userJSON) + `}`)
-	body, err := c.Call(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-	var r FECStatsResponse
-	if err := json.Unmarshal(body, &r); err != nil {
-		return nil, fmt.Errorf("parse get_fec_stats response: %w (body=%q)", err, body)
-	}
-	if !r.OK {
-		switch r.Error {
-		case "user not found":
-			return nil, ErrUserNotFound
-		case "fec not built":
-			return nil, ErrFECNotBuilt
-		default:
-			return nil, fmt.Errorf("server error: %s", r.Error)
-		}
 	}
 	return &r, nil
 }
