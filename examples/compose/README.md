@@ -136,7 +136,3 @@ docker run --rm \
   state indicates a real problem — check `docker compose logs <svc>`.
 - **Port 9092 / 3000 / 9091 already in use:** another process owns the
   port. `ss -tlnp | grep -E ':(3000|9091|9092)'` to find the offender.
-- **macOS / Windows:** `network_mode: host` doesn't work properly outside
-  Linux (Docker Desktop translates it but loopback still doesn't reach
-  the host). This stack is Linux-only; on other platforms run Prometheus
-  and Grafana natively per `docs/README.md` §4.2.
