@@ -45,7 +45,7 @@ func (f *fakeClient) GetFECStats(ctx context.Context, user string) (*client.FECS
 
 func TestCollect_HappyPath(t *testing.T) {
 	fc := &fakeClient{
-		build: &client.BuildInfoResponse{Version: "0.4.0", Scheduler: "backup_fec", FECEnabled: 1},
+		build: &client.BuildInfoResponse{Version: "0.5.0", Scheduler: "backup_fec", FECEnabled: 1},
 		stats: &client.StatsResponse{
 			NClients: 1, BytesTx: 1000, BytesRx: 2000,
 			DgramSent: 100, DgramRecv: 99, DgramLost: 1, DgramAcked: 98,
@@ -67,7 +67,7 @@ func TestCollect_HappyPath(t *testing.T) {
 				MPState: 1},
 		},
 	}
-	coll := New(fc)
+	coll := New(fc, 0)
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(coll)
 
@@ -92,14 +92,14 @@ mqvpn_server_uptime_seconds 3601
 
 func TestCollect_FECNotBuilt_OmitsFECMetrics(t *testing.T) {
 	fc := &fakeClient{
-		build: &client.BuildInfoResponse{Version: "0.4.0", Scheduler: "wlb", FECEnabled: 0},
+		build: &client.BuildInfoResponse{Version: "0.5.0", Scheduler: "wlb", FECEnabled: 0},
 		status: &client.StatusResponse{
 			NClients: 1,
 			Clients:  []client.ClientInfo{{User: "alice", Paths: []client.PathStats{}}},
 		},
 		fecErr: map[string]error{"alice": client.ErrFECNotBuilt},
 	}
-	coll := New(fc)
+	coll := New(fc, 0)
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(coll)
 
@@ -114,7 +114,7 @@ func TestCollect_FECNotBuilt_OmitsFECMetrics(t *testing.T) {
 
 func TestCollect_UserNotFound_SkipsThatUserOnly(t *testing.T) {
 	fc := &fakeClient{
-		build: &client.BuildInfoResponse{Version: "0.4.0", Scheduler: "wlb", FECEnabled: 1},
+		build: &client.BuildInfoResponse{Version: "0.5.0", Scheduler: "wlb", FECEnabled: 1},
 		status: &client.StatusResponse{
 			NClients: 2,
 			Clients: []client.ClientInfo{
@@ -127,7 +127,7 @@ func TestCollect_UserNotFound_SkipsThatUserOnly(t *testing.T) {
 		},
 		fecErr: map[string]error{"alice": client.ErrUserNotFound},
 	}
-	coll := New(fc)
+	coll := New(fc, 0)
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(coll)
 

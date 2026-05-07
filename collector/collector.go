@@ -28,7 +28,8 @@ type Source interface {
 }
 
 type Collector struct {
-	src Source
+	src    Source
+	budget time.Duration
 
 	// Build info is cached for 60s — version/scheduler don't change mid-run.
 	buildMu sync.Mutex
@@ -39,9 +40,18 @@ type Collector struct {
 	scrapeDuration prometheus.Histogram
 }
 
-func New(src Source) *Collector {
+// DefaultScrapeBudget is the fallback overall scrape budget when a caller
+// passes 0 to New. Sized to stay below a typical Prometheus scrape_interval
+// (15s) so a slow mqvpn cannot queue scrapes against each other.
+const DefaultScrapeBudget = 10 * time.Second
+
+func New(src Source, budget time.Duration) *Collector {
+	if budget <= 0 {
+		budget = DefaultScrapeBudget
+	}
 	return &Collector{
-		src: src,
+		src:    src,
+		budget: budget,
 		scrapeFailures: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "mqvpn_exporter_scrape_failures_total",
 			Help: "Number of scrape calls to mqvpn that failed.",
@@ -109,7 +119,7 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 		ch <- c.scrapeDuration
 	}()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), c.budget)
 	defer cancel()
 
 	bi, err := c.cachedBuildInfo(ctx)

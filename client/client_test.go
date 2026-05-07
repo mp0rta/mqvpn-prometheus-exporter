@@ -57,7 +57,7 @@ func startMock(t *testing.T, resp string) (addr string, stop func()) {
 
 func TestGetBuildInfo_OK(t *testing.T) {
 	addr, stop := startMock(t,
-		`{"ok":true,"version":"0.4.0","scheduler":"backup_fec","fec_enabled":1}`)
+		`{"ok":true,"version":"0.5.0","scheduler":"backup_fec","fec_enabled":1}`)
 	defer stop()
 
 	c := New(addr, 2*time.Second)
@@ -65,7 +65,7 @@ func TestGetBuildInfo_OK(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Version != "0.4.0" {
+	if info.Version != "0.5.0" {
 		t.Errorf("version: got %q", info.Version)
 	}
 	if info.Scheduler != "backup_fec" {

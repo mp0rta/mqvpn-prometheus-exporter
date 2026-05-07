@@ -128,7 +128,7 @@ func (c *Client) GetStatus(ctx context.Context) (*StatusResponse, error) {
 }
 
 // StatsResponse — see mqvpn/docs/control-api.md §5 get_stats. The schema was
-// extended in mqvpn v0.4.0 with dgram_*/uptime_sec; old fields keep position.
+// extended in mqvpn v0.5.0 with dgram_*/uptime_sec; old fields keep position.
 type StatsResponse struct {
 	baseResponse
 	NClients   int    `json:"n_clients"`

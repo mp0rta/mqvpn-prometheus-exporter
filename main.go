@@ -25,6 +25,8 @@ func main() {
 			"mqvpn control API address (host:port).")
 		timeout = flag.Duration("mqvpn.timeout", 5*time.Second,
 			"Per-call timeout when talking to mqvpn.")
+		scrapeBudget = flag.Duration("mqvpn.scrape-budget", collector.DefaultScrapeBudget,
+			"Overall budget for one Prometheus scrape (sum of all RPCs). Must stay below your Prometheus scrape_interval.")
 	)
 	flag.Parse()
 
@@ -34,7 +36,7 @@ func main() {
 	}
 
 	cli := client.New(*mqvpnAddr, *timeout)
-	coll := collector.New(cli)
+	coll := collector.New(cli, *scrapeBudget)
 
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(coll)
