@@ -83,18 +83,21 @@ func (c *Client) GetBuildInfo(ctx context.Context) (*BuildInfoResponse, error) {
 }
 
 // PathStats — see mqvpn/docs/control-api.md §5 get_status, paths array.
+// `StateLabel` was added in mqvpn v0.5.0; older servers do not return it and
+// the field decodes to the empty string.
 type PathStats struct {
-	PathID   uint64 `json:"path_id"`
-	SRTTMs   uint64 `json:"srtt_ms"`
-	MinRTTMs uint64 `json:"min_rtt_ms"`
-	Cwnd     uint64 `json:"cwnd"`
-	InFlight uint64 `json:"in_flight"`
-	BytesTx  uint64 `json:"bytes_tx"`
-	BytesRx  uint64 `json:"bytes_rx"`
-	PktSent  uint64 `json:"pkt_sent"`
-	PktRecv  uint64 `json:"pkt_recv"`
-	PktLost  uint64 `json:"pkt_lost"`
-	State    uint8  `json:"state"`
+	PathID     uint64 `json:"path_id"`
+	SRTTMs     uint64 `json:"srtt_ms"`
+	MinRTTMs   uint64 `json:"min_rtt_ms"`
+	Cwnd       uint64 `json:"cwnd"`
+	InFlight   uint64 `json:"in_flight"`
+	BytesTx    uint64 `json:"bytes_tx"`
+	BytesRx    uint64 `json:"bytes_rx"`
+	PktSent    uint64 `json:"pkt_sent"`
+	PktRecv    uint64 `json:"pkt_recv"`
+	PktLost    uint64 `json:"pkt_lost"`
+	State      uint8  `json:"state"`
+	StateLabel string `json:"state_label"`
 }
 
 type ClientInfo struct {
@@ -165,16 +168,63 @@ var (
 )
 
 // FECStatsResponse — see mqvpn/docs/control-api.md §5 get_fec_stats.
+// `MPStateLabel` was added in mqvpn v0.5.0; older servers do not return it
+// and the field decodes to the empty string.
 type FECStatsResponse struct {
 	baseResponse
 	User            string `json:"user"`
 	EnableFEC       uint8  `json:"enable_fec"`
 	MPState         uint8  `json:"mp_state"`
+	MPStateLabel    string `json:"mp_state_label"`
 	FECSendCnt      uint64 `json:"fec_send_cnt"`
 	FECRecoverCnt   uint64 `json:"fec_recover_cnt"`
 	LostDgramCnt    uint64 `json:"lost_dgram_cnt"`
 	TotalAppBytes   uint64 `json:"total_app_bytes"`
 	StandbyAppBytes uint64 `json:"standby_app_bytes"`
+}
+
+// FECStatsEntry is one element of AllFECStatsResponse.Users — same shape as
+// FECStatsResponse minus the {ok,error} envelope.
+type FECStatsEntry struct {
+	User            string `json:"user"`
+	EnableFEC       uint8  `json:"enable_fec"`
+	MPState         uint8  `json:"mp_state"`
+	MPStateLabel    string `json:"mp_state_label"`
+	FECSendCnt      uint64 `json:"fec_send_cnt"`
+	FECRecoverCnt   uint64 `json:"fec_recover_cnt"`
+	LostDgramCnt    uint64 `json:"lost_dgram_cnt"`
+	TotalAppBytes   uint64 `json:"total_app_bytes"`
+	StandbyAppBytes uint64 `json:"standby_app_bytes"`
+}
+
+// AllFECStatsResponse — see mqvpn/docs/control-api.md §5.8 get_all_fec_stats.
+// Bulk variant that collapses N+1 RPCs (one per user) into a single call.
+type AllFECStatsResponse struct {
+	baseResponse
+	NUsers int             `json:"n_users"`
+	Users  []FECStatsEntry `json:"users"`
+}
+
+// GetAllFECStats returns the bulk FEC stats for every active session.
+// Returns ErrFECNotBuilt for the documented "fec not built" failure so the
+// collector can drop FEC metrics for the rest of the scrape; any other
+// non-OK response surfaces as a generic error.
+func (c *Client) GetAllFECStats(ctx context.Context) (*AllFECStatsResponse, error) {
+	body, err := c.Call(ctx, []byte(`{"cmd":"get_all_fec_stats"}`))
+	if err != nil {
+		return nil, err
+	}
+	var r AllFECStatsResponse
+	if err := json.Unmarshal(body, &r); err != nil {
+		return nil, fmt.Errorf("parse get_all_fec_stats response: %w (body=%q)", err, body)
+	}
+	if !r.OK {
+		if r.Error == "fec not built" {
+			return nil, ErrFECNotBuilt
+		}
+		return nil, fmt.Errorf("server error: %s", r.Error)
+	}
+	return &r, nil
 }
 
 // GetFECStats returns ErrUserNotFound or ErrFECNotBuilt for the two known

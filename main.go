@@ -27,6 +27,8 @@ func main() {
 			"Per-call timeout when talking to mqvpn.")
 		scrapeBudget = flag.Duration("mqvpn.scrape-budget", collector.DefaultScrapeBudget,
 			"Overall budget for one Prometheus scrape (sum of all RPCs). Must stay below your Prometheus scrape_interval.")
+		includeEndpoint = flag.Bool("metrics.include-endpoint", false,
+			"Emit mqvpn_client_info{user, endpoint}=1. Off by default — mobile/NAT clients can rebind endpoints frequently and inflate Prometheus series cardinality.")
 	)
 	flag.Parse()
 
@@ -36,7 +38,11 @@ func main() {
 	}
 
 	cli := client.New(*mqvpnAddr, *timeout)
-	coll := collector.New(cli, *scrapeBudget)
+	coll := collector.New(collector.Config{
+		Source:          cli,
+		Budget:          *scrapeBudget,
+		IncludeEndpoint: *includeEndpoint,
+	})
 
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(coll)

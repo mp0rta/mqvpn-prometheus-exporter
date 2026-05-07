@@ -15,8 +15,8 @@ type fakeClient struct {
 	build  *client.BuildInfoResponse
 	stats  *client.StatsResponse
 	status *client.StatusResponse
-	fec    map[string]*client.FECStatsResponse
-	fecErr map[string]error
+	allFEC *client.AllFECStatsResponse
+	fecErr error
 }
 
 func (f *fakeClient) GetBuildInfo(ctx context.Context) (*client.BuildInfoResponse, error) {
@@ -36,11 +36,11 @@ func (f *fakeClient) GetStatus(ctx context.Context) (*client.StatusResponse, err
 	return f.status, nil
 }
 
-func (f *fakeClient) GetFECStats(ctx context.Context, user string) (*client.FECStatsResponse, error) {
-	if e, ok := f.fecErr[user]; ok {
-		return nil, e
+func (f *fakeClient) GetAllFECStats(ctx context.Context) (*client.AllFECStatsResponse, error) {
+	if f.fecErr != nil {
+		return nil, f.fecErr
 	}
-	return f.fec[user], nil
+	return f.allFEC, nil
 }
 
 func TestCollect_HappyPath(t *testing.T) {
@@ -54,20 +54,25 @@ func TestCollect_HappyPath(t *testing.T) {
 		status: &client.StatusResponse{
 			NClients: 1,
 			Clients: []client.ClientInfo{{
-				User: "alice", ConnectedSec: 42, BytesTx: 1000, BytesRx: 2000,
+				User: "alice", Endpoint: "1.2.3.4:443",
+				ConnectedSec: 42, BytesTx: 1000, BytesRx: 2000,
 				Paths: []client.PathStats{{
 					PathID: 0, SRTTMs: 31, MinRTTMs: 18, Cwnd: 196608,
-					BytesTx: 900, BytesRx: 1900, PktSent: 50, PktRecv: 49, PktLost: 1, State: 0,
+					BytesTx: 900, BytesRx: 1900, PktSent: 50, PktRecv: 49, PktLost: 1,
+					State: 2, StateLabel: "active",
 				}},
 			}},
 		},
-		fec: map[string]*client.FECStatsResponse{
-			"alice": {EnableFEC: 1, FECSendCnt: 142, FECRecoverCnt: 17,
-				LostDgramCnt: 23, TotalAppBytes: 9123456, StandbyAppBytes: 421337,
-				MPState: 1},
+		allFEC: &client.AllFECStatsResponse{
+			NUsers: 1,
+			Users: []client.FECStatsEntry{{
+				User: "alice", EnableFEC: 1, MPState: 1, MPStateLabel: "active_with_standby",
+				FECSendCnt: 142, FECRecoverCnt: 17, LostDgramCnt: 23,
+				TotalAppBytes: 9123456, StandbyAppBytes: 421337,
+			}},
 		},
 	}
-	coll := New(fc, 0)
+	coll := New(Config{Source: fc})
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(coll)
 
@@ -88,6 +93,25 @@ mqvpn_server_uptime_seconds 3601
 	if err := testutil.GatherAndCompare(reg, strings.NewReader(expectedUptime), "mqvpn_server_uptime_seconds"); err != nil {
 		t.Error(err)
 	}
+
+	// info-style state metrics: value is 1, label carries the state name.
+	expectedPathState := `
+# HELP mqvpn_path_state_info xquic per-path transport state as a label; value always 1. State is one of init, validating, active, closing, closed, unknown.
+# TYPE mqvpn_path_state_info gauge
+mqvpn_path_state_info{path_id="0",state="active",user="alice"} 1
+`
+	if err := testutil.GatherAndCompare(reg, strings.NewReader(expectedPathState), "mqvpn_path_state_info"); err != nil {
+		t.Error(err)
+	}
+
+	expectedMP := `
+# HELP mqvpn_client_mp_state_info xquic multipath state as a label; value always 1. State is one of single_path, active_with_standby, standby_only, active_only, unknown.
+# TYPE mqvpn_client_mp_state_info gauge
+mqvpn_client_mp_state_info{state="active_with_standby",user="alice"} 1
+`
+	if err := testutil.GatherAndCompare(reg, strings.NewReader(expectedMP), "mqvpn_client_mp_state_info"); err != nil {
+		t.Error(err)
+	}
 }
 
 func TestCollect_FECNotBuilt_OmitsFECMetrics(t *testing.T) {
@@ -97,9 +121,9 @@ func TestCollect_FECNotBuilt_OmitsFECMetrics(t *testing.T) {
 			NClients: 1,
 			Clients:  []client.ClientInfo{{User: "alice", Paths: []client.PathStats{}}},
 		},
-		fecErr: map[string]error{"alice": client.ErrFECNotBuilt},
+		fecErr: client.ErrFECNotBuilt,
 	}
-	coll := New(fc, 0)
+	coll := New(Config{Source: fc})
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(coll)
 
@@ -110,9 +134,19 @@ func TestCollect_FECNotBuilt_OmitsFECMetrics(t *testing.T) {
 	if n != 0 {
 		t.Errorf("expected 0 fec metrics, got %d", n)
 	}
+	// mp_state_info also vanishes because it is sourced from the FEC bulk.
+	n, err = testutil.GatherAndCount(reg, "mqvpn_client_mp_state_info")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Errorf("expected 0 mp_state_info metrics when FEC is unavailable, got %d", n)
+	}
 }
 
-func TestCollect_UserNotFound_SkipsThatUserOnly(t *testing.T) {
+func TestCollect_BulkRaceUserMissing_SkipsThatUserOnly(t *testing.T) {
+	// Mirrors the v0.4 N+1 "user disconnected mid-scrape" path: get_status
+	// returned both, but the bulk FEC response only knows about bob.
 	fc := &fakeClient{
 		build: &client.BuildInfoResponse{Version: "0.5.0", Scheduler: "wlb", FECEnabled: 1},
 		status: &client.StatusResponse{
@@ -122,12 +156,14 @@ func TestCollect_UserNotFound_SkipsThatUserOnly(t *testing.T) {
 				{User: "bob", Paths: nil},
 			},
 		},
-		fec: map[string]*client.FECStatsResponse{
-			"bob": {EnableFEC: 1, FECSendCnt: 5},
+		allFEC: &client.AllFECStatsResponse{
+			NUsers: 1,
+			Users: []client.FECStatsEntry{
+				{User: "bob", EnableFEC: 1, MPStateLabel: "single_path", FECSendCnt: 5},
+			},
 		},
-		fecErr: map[string]error{"alice": client.ErrUserNotFound},
 	}
-	coll := New(fc, 0)
+	coll := New(Config{Source: fc})
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(coll)
 
@@ -137,5 +173,62 @@ func TestCollect_UserNotFound_SkipsThatUserOnly(t *testing.T) {
 	}
 	if n != 1 {
 		t.Errorf("expected 1 fec_send_total sample (bob only), got %d", n)
+	}
+}
+
+func TestCollect_IncludeEndpoint_OptIn(t *testing.T) {
+	mkFC := func() *fakeClient {
+		return &fakeClient{
+			build: &client.BuildInfoResponse{Version: "0.5.0", Scheduler: "wlb", FECEnabled: 0},
+			status: &client.StatusResponse{
+				NClients: 1,
+				Clients: []client.ClientInfo{{
+					User: "alice", Endpoint: "1.2.3.4:443", Paths: nil,
+				}},
+			},
+			fecErr: client.ErrFECNotBuilt,
+		}
+	}
+
+	regOff := prometheus.NewRegistry()
+	regOff.MustRegister(New(Config{Source: mkFC()}))
+	if n, err := testutil.GatherAndCount(regOff, "mqvpn_client_info"); err != nil {
+		t.Fatal(err)
+	} else if n != 0 {
+		t.Errorf("default off: expected 0 mqvpn_client_info, got %d", n)
+	}
+
+	regOn := prometheus.NewRegistry()
+	regOn.MustRegister(New(Config{Source: mkFC(), IncludeEndpoint: true}))
+	expectedInfo := `
+# HELP mqvpn_client_info Per-client metadata (opt-in via --metrics.include-endpoint); value is always 1.
+# TYPE mqvpn_client_info gauge
+mqvpn_client_info{endpoint="1.2.3.4:443",user="alice"} 1
+`
+	if err := testutil.GatherAndCompare(regOn, strings.NewReader(expectedInfo), "mqvpn_client_info"); err != nil {
+		t.Error(err)
+	}
+}
+
+func TestCollect_ScrapesTotalIncrementsEachCall(t *testing.T) {
+	fc := &fakeClient{
+		build:  &client.BuildInfoResponse{Version: "0.5.0", Scheduler: "wlb", FECEnabled: 0},
+		status: &client.StatusResponse{NClients: 0},
+		fecErr: client.ErrFECNotBuilt,
+	}
+	coll := New(Config{Source: fc})
+	reg := prometheus.NewRegistry()
+	reg.MustRegister(coll)
+
+	// Each gather triggers exactly one Collect, which increments scrapesTotal
+	// before emitting it. After the GatherAndCompare below (one gather), the
+	// counter should read 1.
+	expected := `
+# HELP mqvpn_exporter_scrapes_total Total Prometheus scrapes processed by this exporter (success + failure).
+# TYPE mqvpn_exporter_scrapes_total counter
+mqvpn_exporter_scrapes_total 1
+`
+	if err := testutil.GatherAndCompare(reg, strings.NewReader(expected), "mqvpn_exporter_scrapes_total"); err != nil {
+		t.Error(err)
 	}
 }

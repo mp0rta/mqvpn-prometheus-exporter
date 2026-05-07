@@ -165,3 +165,59 @@ func TestGetFECStats_FECNotBuilt(t *testing.T) {
 		t.Errorf("got %v", err)
 	}
 }
+
+func TestGetAllFECStats_OK(t *testing.T) {
+	resp := `{"ok":true,"n_users":2,"users":[
+        {"user":"alice","enable_fec":1,"mp_state":1,"mp_state_label":"active_with_standby",
+         "fec_send_cnt":142,"fec_recover_cnt":17,"lost_dgram_cnt":23,
+         "total_app_bytes":9123456,"standby_app_bytes":421337},
+        {"user":"bob","enable_fec":1,"mp_state":0,"mp_state_label":"single_path",
+         "fec_send_cnt":0,"fec_recover_cnt":0,"lost_dgram_cnt":0,
+         "total_app_bytes":555555,"standby_app_bytes":0}]}`
+	addr, stop := startMock(t, resp)
+	defer stop()
+	c := New(addr, 2*time.Second)
+	r, err := c.GetAllFECStats(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.NUsers != 2 || len(r.Users) != 2 {
+		t.Fatalf("n_users=%d len=%d", r.NUsers, len(r.Users))
+	}
+	if r.Users[0].User != "alice" || r.Users[0].MPStateLabel != "active_with_standby" {
+		t.Errorf("alice: %+v", r.Users[0])
+	}
+	if r.Users[1].User != "bob" || r.Users[1].MPStateLabel != "single_path" {
+		t.Errorf("bob: %+v", r.Users[1])
+	}
+}
+
+func TestGetAllFECStats_FECNotBuilt(t *testing.T) {
+	addr, stop := startMock(t, `{"ok":false,"error":"fec not built"}`)
+	defer stop()
+	c := New(addr, 2*time.Second)
+	_, err := c.GetAllFECStats(context.Background())
+	if !errors.Is(err, ErrFECNotBuilt) {
+		t.Errorf("got %v", err)
+	}
+}
+
+func TestGetStatus_StateLabelDecoded(t *testing.T) {
+	resp := `{"ok":true,"n_clients":1,"clients":[
+        {"user":"alice","endpoint":"1.2.3.4:443","connected_sec":10,
+         "bytes_tx":1,"bytes_rx":2,
+         "paths":[{"path_id":0,"srtt_ms":5,"min_rtt_ms":3,"cwnd":1024,
+                   "in_flight":0,"bytes_tx":1,"bytes_rx":2,
+                   "pkt_sent":1,"pkt_recv":1,"pkt_lost":0,
+                   "state":2,"state_label":"active"}]}]}`
+	addr, stop := startMock(t, resp)
+	defer stop()
+	c := New(addr, 2*time.Second)
+	s, err := c.GetStatus(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Clients[0].Paths[0].StateLabel != "active" {
+		t.Errorf("state_label: %q", s.Clients[0].Paths[0].StateLabel)
+	}
+}

@@ -24,8 +24,9 @@ Open `http://127.0.0.1:9091/metrics` to verify output.
 |------|---------|-------------|
 | `--web.listen-address` | `127.0.0.1:9091` | Address on which to expose `/metrics`. Defaults to loopback. Set to `0.0.0.0:9091` to expose externally — you MUST front with nginx for authentication (see Section 9). |
 | `--mqvpn.address` | `127.0.0.1:9090` | mqvpn control API address (`host:port`). Must be reachable from the exporter process. |
-| `--mqvpn.timeout` | `5s` | Per-RPC timeout when calling mqvpn. Each Prometheus scrape makes up to `1 + N_clients` RPCs (build_info cached 60s, get_stats, get_status, get_fec_stats per client). |
-| `--mqvpn.scrape-budget` | `10s` | Total time budget for one full scrape (all RPCs combined). Tuned to stay below your Prometheus `scrape_interval` so a slow scrape does not queue behind the next one. With many clients and `--mqvpn.timeout` close to the budget, the tail of the per-user FEC calls may silently fail; either reduce `--mqvpn.timeout` or raise `--mqvpn.scrape-budget` (and your `scrape_interval` accordingly). |
+| `--mqvpn.timeout` | `5s` | Per-RPC timeout when calling mqvpn. Each Prometheus scrape issues a fixed 4 RPCs (build_info cached 60s, get_stats, get_status, get_all_fec_stats) regardless of active-user count. |
+| `--mqvpn.scrape-budget` | `10s` | Total time budget for one full scrape (all RPCs combined). Tuned to stay below your Prometheus `scrape_interval` so a slow scrape does not queue behind the next one. Each scrape is now a fixed 4 RPCs (build_info cached 60s, get_stats, get_status, get_all_fec_stats) regardless of active-user count, so the budget is far less likely to be exhausted than the v0.4-era per-user N+1 pattern. |
+| `--metrics.include-endpoint` | `false` | If set, emit `mqvpn_client_info{user, endpoint}=1` so PromQL can detect endpoint changes (e.g. NAT rebinding). Off by default — mobile/CGNAT clients can churn endpoints frequently and inflate series cardinality. |
 
 ---
 
@@ -106,6 +107,7 @@ counter resets transparently.
 | `mqvpn_client_bytes_tx_total` | Counter | TUN bytes sent to this client. |
 | `mqvpn_client_bytes_rx_total` | Counter | TUN bytes received from this client. |
 | `mqvpn_client_connected_seconds` | Gauge | Seconds since this client connected. |
+| `mqvpn_client_info` | Gauge (1) | Per-client metadata (opt-in via `--metrics.include-endpoint`). Labels: `user`, `endpoint`. Value always 1. |
 
 ### 5.3 Per-path (labels: `user`, `path_id`)
 
@@ -120,7 +122,7 @@ counter resets transparently.
 | `mqvpn_path_pkt_sent_total` | Counter | QUIC packets sent on this path. |
 | `mqvpn_path_pkt_recv_total` | Counter | QUIC packets received on this path. |
 | `mqvpn_path_pkt_lost_total` | Counter | QUIC packets declared lost on this path. |
-| `mqvpn_path_state` | Gauge | xquic transport path state (numeric; see Section 6). |
+| `mqvpn_path_state_info` | Gauge (1) | xquic transport path state as a label; value always 1. Extra label `state` is one of `init`, `validating`, `active`, `closing`, `closed`, `unknown` (see §6). |
 
 ### 5.4 Per-client FEC (label: `user`; requires `backup_fec` scheduler + FEC build)
 
@@ -129,60 +131,60 @@ counter resets transparently.
 | `mqvpn_client_fec_enabled` | Gauge | 1 if FEC negotiated for this session, 0 otherwise. |
 | `mqvpn_client_fec_send_total` | Counter | FEC repair packets sent. |
 | `mqvpn_client_fec_recover_total` | Counter | Packets recovered by FEC decoder. |
-| `mqvpn_client_lost_dgram_total` | Counter | QUIC datagrams reported lost for this client. |
+| `mqvpn_client_lost_dgram_total` | Counter | QUIC datagrams reported lost for this client. **Per-session counter — resets when the client reconnects.** Not algebraically related to `mqvpn_server_dgram_lost_total` (which is process-wide cumulative). |
 | `mqvpn_client_app_bytes_total` | Counter | Total application bytes carried (all paths). |
 | `mqvpn_client_standby_app_bytes_total` | Counter | Application bytes delivered via standby path. |
-| `mqvpn_client_mp_state` | Gauge | xquic mp_state for this client (numeric; see Section 6). |
+| `mqvpn_client_mp_state_info` | Gauge (1) | xquic multipath state as a label; value always 1. Extra label `state` is one of `single_path`, `active_with_standby`, `standby_only`, `active_only`, `unknown` (see §6). |
 
 ### 5.5 Exporter self-stats (no labels)
 
 | Metric | Type | Description |
 |--------|------|-------------|
 | `mqvpn_exporter_build_info` | Gauge (1) | Exporter version; label `version`. Value always 1. |
-| `mqvpn_exporter_scrape_failures_total` | Counter | Number of failed mqvpn RPC calls during scrapes. |
+| `mqvpn_exporter_scrapes_total` | Counter | Total scrapes processed by this exporter (success + failure). Use as the denominator for SLI ratios with `mqvpn_exporter_scrape_failures_total`. |
+| `mqvpn_exporter_scrape_failures_total` | Counter | Individual mqvpn RPC calls that failed during scrapes. A single scrape can contribute multiple failures. |
 | `mqvpn_exporter_scrape_duration_seconds` | Histogram | Time to complete one full scrape of mqvpn. |
 
 ---
 
 ## 6. Enum Mappings
 
-### 6.1 `mqvpn_path_state` — xquic transport path state
+Both state metrics ship as **info-style** Prometheus metrics (value always 1,
+state encoded as a label). Filter and group with PromQL `state="..."` rather
+than numeric comparisons; mqvpn translates the underlying xquic enum to a
+stable string per release, so the *label* values are the contract you can rely
+on. The numeric `state` and `mp_state` fields in the JSON wire format are
+preserved for legacy consumers but the labels here are derived from
+`state_label` / `mp_state_label`, both added in mqvpn v0.5.0.
 
-The `mqvpn_path_state` metric exposes the **raw xquic transport-layer path
-state** (`xqc_path_state_t` in `xquic_typedef.h`), NOT the mqvpn scheduler's
-logical role (primary / standby / etc.). Do not infer scheduler roles from
-this value; the mapping is scheduler-specific and may change between mqvpn
-versions.
+### 6.1 `mqvpn_path_state_info` — xquic transport path state
 
-Known values at xquic HEAD (for reference only; consult `xquic_typedef.h` for
-the authoritative list):
+Maps to `xqc_path_state_t` (xquic `transport/xqc_multipath.h`). A path in
+`active` is available for packet scheduling; other states are transient and
+should resolve to `active` or `closed` within a few RTTs.
 
-| Value | Name | Meaning |
-|-------|------|---------|
-| 0 | `XQC_PATH_STATE_CREATING` | Path is being initialised, not yet usable. |
-| 1 | `XQC_PATH_STATE_VALIDATING` | Path validation (PATH_CHALLENGE/RESPONSE) in progress. |
-| 2 | `XQC_PATH_STATE_ACTIVE` | Path is fully validated and active. |
-| 3 | `XQC_PATH_STATE_CLOSING` | Path is being gracefully closed. |
-| 4 | `XQC_PATH_STATE_CLOSED` | Path is closed (terminal). |
+| Label | Meaning |
+|-------|---------|
+| `init` | Path is being initialised, not yet usable. |
+| `validating` | Path validation (PATH_CHALLENGE / PATH_RESPONSE) in progress. |
+| `active` | Path is fully validated and usable. |
+| `closing` | Path is being gracefully closed (PATH_ABANDONED in flight). |
+| `closed` | Path is closed (terminal). |
+| `unknown` | xquic returned a state value mqvpn does not recognise (xquic enum was extended without an mqvpn label update). |
 
-A path in state 2 (`ACTIVE`) is available for packet scheduling. Other states
-are transient and should resolve to ACTIVE or CLOSED within a few RTTs.
+### 6.2 `mqvpn_client_mp_state_info` — xquic multipath session state
 
-### 6.2 `mqvpn_client_mp_state` — xquic mp_state
+Computed by xquic from validated-path and standby-path counts (see
+`xqc_conn_get_mp_stats`). Use this to detect degraded multipath rather than
+inspecting individual `mqvpn_path_state_info` values.
 
-The `mqvpn_client_mp_state` metric exposes the **xquic multipath session
-state** (`xqc_multipath_state_t`). This is an internal xquic state machine
-value. Known values:
-
-| Value | Name | Meaning |
-|-------|------|---------|
-| 0 | `XQC_MULTIPATH_CREATED` | Multipath session just created, no paths yet. |
-| 1 | `XQC_MULTIPATH_ACTIVE` | At least one validated path available. |
-| 2 | `XQC_MULTIPATH_STANDBY` | Primary path lost; standby path in use. |
-| 3 | `XQC_MULTIPATH_CLOSING` | Session closing, draining remaining paths. |
-
-These values are diagnostic. Use `mqvpn_client_paths` to count available paths
-rather than interpreting `mp_state` directly.
+| Label | Meaning |
+|-------|---------|
+| `single_path` | Single path or multipath disabled. |
+| `active_with_standby` | Multiple validated paths, mix of available + standby — best, full redundancy. |
+| `standby_only` | Only standby paths available — primary down, **degraded**. |
+| `active_only` | Multiple paths, all available, no standby designated. |
+| `unknown` | xquic returned a value mqvpn does not recognise. |
 
 ---
 
@@ -196,12 +198,19 @@ rather than interpreting `mp_state` directly.
 - **FEC counters** (`fec_send_cnt`, `fec_recover_cnt`) are uint32 widened to
   uint64 on the wire; they wrap at ~4 billion events. Use `increase()` over
   short windows or `rate()` to avoid wrap artifacts.
+- **`mqvpn_server_dgram_lost_total` vs `mqvpn_client_lost_dgram_total`** are
+  **not algebraically related**. The server counter is a process-wide
+  cumulative tracked outside any session and survives client disconnects;
+  per-client counters are per-session and reset on disconnect. Do not write
+  alerts that compare their sums or rates — they will diverge whenever a
+  session closes, and the divergence is the expected behaviour.
 - **Absent FEC metrics** — if the mqvpn server is built without
   `XQC_ENABLE_FEC`, or if the active scheduler is not `backup_fec`, the
   `mqvpn_client_fec_*`, `mqvpn_client_lost_dgram_total`,
   `mqvpn_client_app_bytes_total`, `mqvpn_client_standby_app_bytes_total`, and
-  `mqvpn_client_mp_state` metrics will not appear at all in `/metrics`. This is
-  expected — use `unless` or `or` in PromQL rules to tolerate absent series.
+  `mqvpn_client_mp_state_info` metrics will not appear at all in `/metrics`.
+  This is expected — use `unless` or `or` in PromQL rules to tolerate absent
+  series.
 
 ---
 
