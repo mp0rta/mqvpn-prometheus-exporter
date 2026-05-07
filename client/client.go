@@ -199,10 +199,12 @@ type FECStatsEntry struct {
 
 // AllFECStatsResponse — see mqvpn/docs/control-api.md §5.8 get_all_fec_stats.
 // Bulk variant that collapses N+1 RPCs (one per user) into a single call.
+// Field name parity with GetStatus: a connected user is a "client"; the
+// `users` nomenclature is reserved for list_users (registered auth-table).
 type AllFECStatsResponse struct {
 	baseResponse
-	NUsers int             `json:"n_users"`
-	Users  []FECStatsEntry `json:"users"`
+	NClients int             `json:"n_clients"`
+	Clients  []FECStatsEntry `json:"clients"`
 }
 
 // GetAllFECStats returns the bulk FEC stats for every active session.

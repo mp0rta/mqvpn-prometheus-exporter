@@ -22,7 +22,7 @@ Open `http://127.0.0.1:9091/metrics` to verify output.
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--web.listen-address` | `127.0.0.1:9091` | Address on which to expose `/metrics`. Defaults to loopback. Set to `0.0.0.0:9091` to expose externally — you MUST front with nginx for authentication (see Section 9). |
+| `--web.listen-address` | `127.0.0.1:9091` | Address on which to expose `/metrics`. Defaults to loopback. Set to `0.0.0.0:9091` to expose externally — you MUST front with nginx for authentication (see Section 10). |
 | `--mqvpn.address` | `127.0.0.1:9090` | mqvpn control API address (`host:port`). Must be reachable from the exporter process. |
 | `--mqvpn.timeout` | `5s` | Per-RPC timeout when calling mqvpn. Each Prometheus scrape issues a fixed 4 RPCs (build_info cached 60s, get_stats, get_status, get_all_fec_stats) regardless of active-user count. |
 | `--mqvpn.scrape-budget` | `10s` | Total time budget for one full scrape (all RPCs combined). Tuned to stay below your Prometheus `scrape_interval` so a slow scrape does not queue behind the next one. Each scrape is now a fixed 4 RPCs (build_info cached 60s, get_stats, get_status, get_all_fec_stats) regardless of active-user count, so the budget is far less likely to be exhausted than the v0.4-era per-user N+1 pattern. |
@@ -50,16 +50,105 @@ cadence. Lower intervals (< 5s) will cause concurrent RPCs and elevated
 
 ---
 
-## 4. Grafana
+## 4. Deployment Topology
+
+The recommended deployment runs **everything on the VPN host** with all
+services bound to loopback, and you reach the Grafana UI via SSH tunnel.
+This matches the exporter's "no auth, loopback only" design (see §10) and
+avoids running an authenticating reverse proxy.
+
+### 4.1 Port plan
+
+| Process | Bind | Notes |
+|---------|------|-------|
+| mqvpn control API | `127.0.0.1:9090` | Set by mqvpn `--control-port`. |
+| `mqvpn-prometheus-exporter` | `127.0.0.1:9091` | Default. |
+| Prometheus | `127.0.0.1:9092` | **Override the default** — Prometheus binds to `:9090` out of the box, which collides with mqvpn. Set `--web.listen-address=127.0.0.1:9092`. |
+| Grafana | `127.0.0.1:3000` | Set `[server] http_addr = 127.0.0.1` in `grafana.ini`. |
+
+### 4.2 Install with systemd
+
+The exporter unit is at [`examples/systemd/mqvpn-exporter.service`](../examples/systemd/mqvpn-exporter.service).
+Install Prometheus and Grafana from your distro packages on the same host
+(Debian/Ubuntu: `apt install prometheus`; Grafana: official APT/YUM repo
+per [grafana.com/docs/grafana/latest/setup-grafana/installation/](https://grafana.com/docs/grafana/latest/setup-grafana/installation/)).
+
+**Prometheus** — drop the scrape config from
+[`examples/prometheus.yml`](../examples/prometheus.yml) into
+`/etc/prometheus/prometheus.yml`, then override the listen address with a
+systemd drop-in:
+
+```bash
+sudo systemctl edit prometheus
+```
+
+```ini
+[Service]
+ExecStart=
+ExecStart=/usr/bin/prometheus \
+  --config.file=/etc/prometheus/prometheus.yml \
+  --web.listen-address=127.0.0.1:9092 \
+  --storage.tsdb.path=/var/lib/prometheus
+```
+
+The empty `ExecStart=` line clears the unit's default and is required —
+without it systemd appends instead of replacing.
+
+**Grafana** — edit `/etc/grafana/grafana.ini`:
+
+```ini
+[server]
+http_addr = 127.0.0.1
+http_port = 3000
+```
+
+Then enable everything:
+
+```bash
+sudo systemctl enable --now mqvpn-exporter prometheus grafana-server
+```
+
+Verify all three are loopback-only:
+
+```bash
+ss -tlnp | grep -E '127.0.0.1:(3000|9091|9092)'
+```
+
+If any of them shows `0.0.0.0:` or `[::]:`, a bind override didn't take —
+fix it before continuing. Anything bound to a routable interface is
+unauthenticated and must not stay that way.
+
+### 4.3 Access Grafana via SSH tunnel
+
+From your laptop:
+
+```bash
+ssh -L 3000:127.0.0.1:3000 vpn-host
+```
+
+Open `http://localhost:3000` in your browser (default credentials
+`admin`/`admin`; change them on first login). The tunnel forwards your
+laptop's port 3000 to Grafana on the VPN host's loopback. No public ports,
+no reverse proxy, no certificate management.
+
+For persistent access, replace the SSH tunnel with a Tailscale / WireGuard
+/ mqvpn link to the host and visit `http://<private-ip>:3000` directly.
+Same idea — Grafana is still loopback-bound, you've just brought your
+client into a network where loopback is reachable.
+
+### 4.4 Wire up the datasource
+
+In Grafana → **Connections → Data sources → Add data source → Prometheus**,
+set the URL to `http://127.0.0.1:9092` (the loopback Prometheus from §4.1).
+Save & test, then proceed to §5 to import the bundled dashboard.
+
+---
+
+## 5. Grafana Dashboard
 
 ### Import the bundled dashboard
 
-```bash
-# Start Grafana (if not already running)
-docker run -d -p 3000:3000 --name grafana grafana/grafana:latest
-```
-
-1. Open `http://localhost:3000` (default credentials: `admin`/`admin`).
+1. Open Grafana via the tunnel from §4.3 (`http://localhost:3000`).
 2. Go to **Dashboards → Import**.
 3. Upload `dashboards/mqvpn-grafana.json` from this repository.
 4. Select your Prometheus datasource when prompted for `DS_PROMETHEUS`.
@@ -79,13 +168,13 @@ The dashboard uses three rows:
 
 ---
 
-## 5. Metric Reference
+## 6. Metric Reference
 
 All metrics use the `mqvpn_` namespace. Counters are monotonically increasing
 and reset when mqvpn restarts. Use `rate()` for throughput; Prometheus handles
 counter resets transparently.
 
-### 5.1 Server-wide (no labels)
+### 6.1 Server-wide (no labels)
 
 | Metric | Type | Description |
 |--------|------|-------------|
@@ -99,7 +188,7 @@ counter resets transparently.
 | `mqvpn_server_uptime_seconds` | Gauge | Seconds since `mqvpn_server_create()` was called. |
 | `mqvpn_build_info` | Gauge (1) | Build metadata; value always 1. Labels: `version`, `scheduler`. |
 
-### 5.2 Per-client (label: `user`)
+### 6.2 Per-client (label: `user`)
 
 | Metric | Type | Description |
 |--------|------|-------------|
@@ -109,7 +198,7 @@ counter resets transparently.
 | `mqvpn_client_connected_seconds` | Gauge | Seconds since this client connected. |
 | `mqvpn_client_info` | Gauge (1) | Per-client metadata (opt-in via `--metrics.include-endpoint`). Labels: `user`, `endpoint`. Value always 1. |
 
-### 5.3 Per-path (labels: `user`, `path_id`)
+### 6.3 Per-path (labels: `user`, `path_id`)
 
 | Metric | Type | Description |
 |--------|------|-------------|
@@ -122,9 +211,9 @@ counter resets transparently.
 | `mqvpn_path_pkt_sent_total` | Counter | QUIC packets sent on this path. |
 | `mqvpn_path_pkt_recv_total` | Counter | QUIC packets received on this path. |
 | `mqvpn_path_pkt_lost_total` | Counter | QUIC packets declared lost on this path. |
-| `mqvpn_path_state_info` | Gauge (1) | xquic transport path state as a label; value always 1. Extra label `state` is one of `init`, `validating`, `active`, `closing`, `closed`, `unknown` (see §6). |
+| `mqvpn_path_state_info` | Gauge (1) | xquic transport path state as a label; value always 1. Extra label `state` is one of `init`, `validating`, `active`, `closing`, `closed`, `unknown` (see §7). |
 
-### 5.4 Per-client FEC (label: `user`; requires `backup_fec` scheduler + FEC build)
+### 6.4 Per-client FEC (label: `user`; requires `backup_fec` scheduler + FEC build)
 
 | Metric | Type | Description |
 |--------|------|-------------|
@@ -134,9 +223,9 @@ counter resets transparently.
 | `mqvpn_client_lost_dgram_total` | Counter | QUIC datagrams reported lost for this client. **Per-session counter — resets when the client reconnects.** Not algebraically related to `mqvpn_server_dgram_lost_total` (which is process-wide cumulative). |
 | `mqvpn_client_app_bytes_total` | Counter | Total application bytes carried (all paths). |
 | `mqvpn_client_standby_app_bytes_total` | Counter | Application bytes delivered via standby path. |
-| `mqvpn_client_mp_state_info` | Gauge (1) | xquic multipath state as a label; value always 1. Extra label `state` is one of `single_path`, `active_with_standby`, `standby_only`, `active_only`, `unknown` (see §6). |
+| `mqvpn_client_mp_state_info` | Gauge (1) | xquic multipath state as a label; value always 1. Extra label `state` is one of `single_path`, `active_with_standby`, `standby_only`, `active_only`, `unknown` (see §7). |
 
-### 5.5 Exporter self-stats (no labels)
+### 6.5 Exporter self-stats (no labels)
 
 | Metric | Type | Description |
 |--------|------|-------------|
@@ -147,7 +236,7 @@ counter resets transparently.
 
 ---
 
-## 6. Enum Mappings
+## 7. Enum Mappings
 
 Both state metrics ship as **info-style** Prometheus metrics (value always 1,
 state encoded as a label). Filter and group with PromQL `state="..."` rather
@@ -157,7 +246,7 @@ on. The numeric `state` and `mp_state` fields in the JSON wire format are
 preserved for legacy consumers but the labels here are derived from
 `state_label` / `mp_state_label`, both added in mqvpn v0.5.0.
 
-### 6.1 `mqvpn_path_state_info` — xquic transport path state
+### 7.1 `mqvpn_path_state_info` — xquic transport path state
 
 Maps to `xqc_path_state_t` (xquic `transport/xqc_multipath.h`). A path in
 `active` is available for packet scheduling; other states are transient and
@@ -172,7 +261,7 @@ should resolve to `active` or `closed` within a few RTTs.
 | `closed` | Path is closed (terminal). |
 | `unknown` | xquic returned a state value mqvpn does not recognise (xquic enum was extended without an mqvpn label update). |
 
-### 6.2 `mqvpn_client_mp_state_info` — xquic multipath session state
+### 7.2 `mqvpn_client_mp_state_info` — xquic multipath session state
 
 Computed by xquic from validated-path and standby-path counts (see
 `xqc_conn_get_mp_stats`). Use this to detect degraded multipath rather than
@@ -188,7 +277,7 @@ inspecting individual `mqvpn_path_state_info` values.
 
 ---
 
-## 7. Counter Semantics
+## 8. Counter Semantics
 
 - **All `*_total` counters** start at 0 when `mqvpn_server_create()` is called
   and reset to 0 on server restart. The `bytes_tx`/`bytes_rx` client-level
@@ -214,7 +303,7 @@ inspecting individual `mqvpn_path_state_info` values.
 
 ---
 
-## 8. mqvpn Version Compatibility
+## 9. mqvpn Version Compatibility
 
 | Exporter version | mqvpn version | Notes |
 |-----------------|---------------|-------|
@@ -228,7 +317,7 @@ ignore unknown JSON fields.
 
 ---
 
-## 9. Safety
+## 10. Safety
 
 **Default: loopback only.** Both the exporter (`127.0.0.1:9091`) and the mqvpn
 control API (`127.0.0.1:9090`) bind to loopback by default. Do not expose
@@ -263,7 +352,7 @@ statistics.
 
 ---
 
-## 10. Troubleshooting
+## 11. Troubleshooting
 
 ### `/metrics` returns empty or only Go/process metrics
 
@@ -285,15 +374,20 @@ One or more RPC calls to mqvpn are failing per scrape. Common causes:
 ### FEC metrics absent from `/metrics`
 
 This is expected in two scenarios:
-1. **mqvpn built without `XQC_ENABLE_FEC`**: check `mqvpn_build_info` — if no
-   `fec_enabled=1` label is present, FEC was not compiled in.
-2. **Active scheduler is not `backup_fec`**: `get_fec_stats` returns
+1. **mqvpn built without `XQC_ENABLE_FEC`**: if `mqvpn_client_fec_enabled` does
+   not appear at all in `/metrics` even with connected clients, FEC was not
+   compiled in. (FEC presence is conveyed by the existence of the
+   `mqvpn_client_fec_*` series, not by a label on `mqvpn_build_info` — that
+   metric only carries `version` and `scheduler`.)
+2. **Active scheduler is not `backup_fec`**: `get_all_fec_stats` returns
    `"fec not built"` if the scheduler does not populate FEC counters.
 
 ### Dashboard panels show "No data"
 
 - Confirm Prometheus is scraping the exporter: check the Prometheus targets
-  page at `http://localhost:9090/targets`.
+  page at `http://localhost:9092/targets` (per the §4.1 port plan; if you
+  kept Prometheus on its default `:9090`, use that — but note the collision
+  with mqvpn's control API).
 - Verify the `DS_PROMETHEUS` datasource is correctly configured in Grafana.
 - FEC row panels will show "No data" if FEC metrics are absent (see above) —
   this is expected; keep the row collapsed when not using `backup_fec`.

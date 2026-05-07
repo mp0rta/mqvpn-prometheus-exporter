@@ -190,8 +190,8 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	fecAvailable := false
 	if afec, err := c.src.GetAllFECStats(ctx); err == nil {
 		fecAvailable = true
-		for i := range afec.Users {
-			e := &afec.Users[i]
+		for i := range afec.Clients {
+			e := &afec.Clients[i]
 			fecByUser[e.User] = e
 		}
 	} else if errors.Is(err, client.ErrFECNotBuilt) {
@@ -213,7 +213,10 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 			float64(ci.BytesRx), ci.User)
 		ch <- prometheus.MustNewConstMetric(descClientConnected, prometheus.GaugeValue,
 			float64(ci.ConnectedSec), ci.User)
-		if c.includeEndpoint {
+		// Skip emit if Endpoint is empty (older mqvpn that does not return it).
+		// A persistent endpoint="" series would silently break NAT-rebinding
+		// alerts that key on `changes(mqvpn_client_info{user="X"}[5m])`.
+		if c.includeEndpoint && ci.Endpoint != "" {
 			ch <- prometheus.MustNewConstMetric(descClientInfo, prometheus.GaugeValue, 1,
 				ci.User, ci.Endpoint)
 		}

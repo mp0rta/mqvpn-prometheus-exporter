@@ -167,7 +167,7 @@ func TestGetFECStats_FECNotBuilt(t *testing.T) {
 }
 
 func TestGetAllFECStats_OK(t *testing.T) {
-	resp := `{"ok":true,"n_users":2,"users":[
+	resp := `{"ok":true,"n_clients":2,"clients":[
         {"user":"alice","enable_fec":1,"mp_state":1,"mp_state_label":"active_with_standby",
          "fec_send_cnt":142,"fec_recover_cnt":17,"lost_dgram_cnt":23,
          "total_app_bytes":9123456,"standby_app_bytes":421337},
@@ -181,14 +181,14 @@ func TestGetAllFECStats_OK(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.NUsers != 2 || len(r.Users) != 2 {
-		t.Fatalf("n_users=%d len=%d", r.NUsers, len(r.Users))
+	if r.NClients != 2 || len(r.Clients) != 2 {
+		t.Fatalf("n_clients=%d len=%d", r.NClients, len(r.Clients))
 	}
-	if r.Users[0].User != "alice" || r.Users[0].MPStateLabel != "active_with_standby" {
-		t.Errorf("alice: %+v", r.Users[0])
+	if r.Clients[0].User != "alice" || r.Clients[0].MPStateLabel != "active_with_standby" {
+		t.Errorf("alice: %+v", r.Clients[0])
 	}
-	if r.Users[1].User != "bob" || r.Users[1].MPStateLabel != "single_path" {
-		t.Errorf("bob: %+v", r.Users[1])
+	if r.Clients[1].User != "bob" || r.Clients[1].MPStateLabel != "single_path" {
+		t.Errorf("bob: %+v", r.Clients[1])
 	}
 }
 

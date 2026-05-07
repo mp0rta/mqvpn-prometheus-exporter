@@ -64,8 +64,8 @@ func TestCollect_HappyPath(t *testing.T) {
 			}},
 		},
 		allFEC: &client.AllFECStatsResponse{
-			NUsers: 1,
-			Users: []client.FECStatsEntry{{
+			NClients: 1,
+			Clients: []client.FECStatsEntry{{
 				User: "alice", EnableFEC: 1, MPState: 1, MPStateLabel: "active_with_standby",
 				FECSendCnt: 142, FECRecoverCnt: 17, LostDgramCnt: 23,
 				TotalAppBytes: 9123456, StandbyAppBytes: 421337,
@@ -157,8 +157,8 @@ func TestCollect_BulkRaceUserMissing_SkipsThatUserOnly(t *testing.T) {
 			},
 		},
 		allFEC: &client.AllFECStatsResponse{
-			NUsers: 1,
-			Users: []client.FECStatsEntry{
+			NClients: 1,
+			Clients: []client.FECStatsEntry{
 				{User: "bob", EnableFEC: 1, MPStateLabel: "single_path", FECSendCnt: 5},
 			},
 		},
@@ -221,14 +221,80 @@ func TestCollect_ScrapesTotalIncrementsEachCall(t *testing.T) {
 	reg.MustRegister(coll)
 
 	// Each gather triggers exactly one Collect, which increments scrapesTotal
-	// before emitting it. After the GatherAndCompare below (one gather), the
-	// counter should read 1.
-	expected := `
+	// before emitting it. We assert TWICE — at counts 1 and 2 — so a future
+	// regression that moves the Inc() into a sync.Once or skips it on the
+	// happy path would fail the second assertion. A single-gather assertion
+	// would pass even in that broken state.
+	expectedFirst := `
 # HELP mqvpn_exporter_scrapes_total Total Prometheus scrapes processed by this exporter (success + failure).
 # TYPE mqvpn_exporter_scrapes_total counter
 mqvpn_exporter_scrapes_total 1
 `
-	if err := testutil.GatherAndCompare(reg, strings.NewReader(expected), "mqvpn_exporter_scrapes_total"); err != nil {
+	if err := testutil.GatherAndCompare(reg, strings.NewReader(expectedFirst), "mqvpn_exporter_scrapes_total"); err != nil {
 		t.Error(err)
+	}
+	expectedSecond := `
+# HELP mqvpn_exporter_scrapes_total Total Prometheus scrapes processed by this exporter (success + failure).
+# TYPE mqvpn_exporter_scrapes_total counter
+mqvpn_exporter_scrapes_total 2
+`
+	if err := testutil.GatherAndCompare(reg, strings.NewReader(expectedSecond), "mqvpn_exporter_scrapes_total"); err != nil {
+		t.Error(err)
+	}
+}
+
+func TestCollect_PathStateLabel_EmptyFallsBackToUnknown(t *testing.T) {
+	// Older mqvpn (or a server build that drops state_label) returns the
+	// numeric state without a label. The exporter must still emit a
+	// well-formed info-style metric with state="unknown" so PromQL queries
+	// keying on the `state` label do not silently match an empty string.
+	fc := &fakeClient{
+		build:  &client.BuildInfoResponse{Version: "0.5.0", Scheduler: "wlb", FECEnabled: 0},
+		fecErr: client.ErrFECNotBuilt,
+		status: &client.StatusResponse{
+			NClients: 1,
+			Clients: []client.ClientInfo{{
+				User: "alice",
+				Paths: []client.PathStats{
+					{PathID: 0, State: 2, StateLabel: ""},
+				},
+			}},
+		},
+	}
+	coll := New(Config{Source: fc})
+	reg := prometheus.NewRegistry()
+	reg.MustRegister(coll)
+
+	expected := `
+# HELP mqvpn_path_state_info xquic per-path transport state as a label; value always 1. State is one of init, validating, active, closing, closed, unknown.
+# TYPE mqvpn_path_state_info gauge
+mqvpn_path_state_info{path_id="0",state="unknown",user="alice"} 1
+`
+	if err := testutil.GatherAndCompare(reg, strings.NewReader(expected), "mqvpn_path_state_info"); err != nil {
+		t.Error(err)
+	}
+}
+
+func TestCollect_IncludeEndpoint_EmptyEndpointSkipsEmit(t *testing.T) {
+	// Older mqvpn (or any code path that returns ClientInfo without an
+	// endpoint) must not emit `mqvpn_client_info{user="alice",endpoint=""}`.
+	// A persistent empty-string label would silently break NAT-rebinding
+	// alerts that look for `changes()` on this series.
+	fc := &fakeClient{
+		build:  &client.BuildInfoResponse{Version: "0.5.0", Scheduler: "wlb", FECEnabled: 0},
+		fecErr: client.ErrFECNotBuilt,
+		status: &client.StatusResponse{
+			NClients: 1,
+			Clients:  []client.ClientInfo{{User: "alice", Endpoint: "", Paths: nil}},
+		},
+	}
+	coll := New(Config{Source: fc, IncludeEndpoint: true})
+	reg := prometheus.NewRegistry()
+	reg.MustRegister(coll)
+
+	if n, err := testutil.GatherAndCount(reg, "mqvpn_client_info"); err != nil {
+		t.Fatal(err)
+	} else if n != 0 {
+		t.Errorf("expected 0 mqvpn_client_info samples for empty endpoint, got %d", n)
 	}
 }
