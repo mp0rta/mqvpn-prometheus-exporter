@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"math"
 	"strconv"
 	"sync"
 	"time"
@@ -233,6 +234,13 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 
 		for j := range ci.Paths {
 			p := &ci.Paths[j]
+			// mqvpn get_status returns a fixed-size paths array; unused
+			// slots carry path_id=UINT64_MAX with all counters zero.
+			// Emitting them produces duplicate-label-set collection errors
+			// because multiple unused slots share the same sentinel id.
+			if p.PathID == math.MaxUint64 {
+				continue
+			}
 			pid := strconv.FormatUint(p.PathID, 10)
 			ch <- prometheus.MustNewConstMetric(descPathSRTT, prometheus.GaugeValue,
 				float64(p.SRTTMs)/1000.0, ci.User, pid)
