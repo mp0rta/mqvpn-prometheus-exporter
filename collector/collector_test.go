@@ -2,6 +2,7 @@ package collector
 
 import (
 	"context"
+	"math"
 	"strings"
 	"testing"
 
@@ -296,5 +297,45 @@ func TestCollect_IncludeEndpoint_EmptyEndpointSkipsEmit(t *testing.T) {
 		t.Fatal(err)
 	} else if n != 0 {
 		t.Errorf("expected 0 mqvpn_client_info samples for empty endpoint, got %d", n)
+	}
+}
+
+// Regression: mqvpn returns a fixed-size paths array with unused slots
+// carrying path_id=UINT64_MAX (state="init", counters zero). When more than
+// one slot is unused, naïvely emitting them yields duplicate-label-set
+// collection errors that crash /metrics with HTTP 500. The collector must
+// skip the sentinel slots.
+func TestCollect_PathIDSentinelDoesNotDuplicate(t *testing.T) {
+	fc := &fakeClient{
+		build:  &client.BuildInfoResponse{Version: "0.5.0", Scheduler: "wlb", FECEnabled: 0},
+		fecErr: client.ErrFECNotBuilt,
+		status: &client.StatusResponse{
+			NClients: 1,
+			Clients: []client.Info{{
+				User: "alice",
+				Paths: []client.PathStats{
+					{PathID: 0, State: 2, StateLabel: "active"},
+					{PathID: math.MaxUint64, State: 0, StateLabel: "init"},
+					{PathID: math.MaxUint64, State: 0, StateLabel: "init"},
+					{PathID: math.MaxUint64, State: 0, StateLabel: "init"},
+				},
+			}},
+		},
+	}
+	coll := New(Config{Source: fc})
+	reg := prometheus.NewRegistry()
+	reg.MustRegister(coll)
+
+	// The Gather pipeline is what /metrics drives. If the collector emits
+	// duplicate (user, path_id) tuples it surfaces here as an error.
+	if _, err := reg.Gather(); err != nil {
+		t.Fatalf("Gather returned duplicate-label error: %v", err)
+	}
+
+	// Active slot should still produce exactly one sample per path metric.
+	if n, err := testutil.GatherAndCount(reg, "mqvpn_path_state_info"); err != nil {
+		t.Fatal(err)
+	} else if n != 1 {
+		t.Errorf("expected 1 mqvpn_path_state_info sample (active path only), got %d", n)
 	}
 }
