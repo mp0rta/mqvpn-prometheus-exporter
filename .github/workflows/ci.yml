@@ -33,8 +33,8 @@ jobs:
       - uses: golangci/golangci-lint-action@v9
         with:
           # v2.1.6 was built with go1.24 and refuses to load configs that
-          # target a higher toolchain. v2.12.2 is built with go1.26.2 and
-          # handles our toolchain go1.26.2 directive.
+          # target a higher toolchain. v2.12.2 is built with go1.26.x and
+          # handles our toolchain go1.26.3 directive (1.26 patch bumps OK).
           version: v2.12.2
 
   vuln:
