@@ -371,7 +371,6 @@ inspecting individual `mqvpn_path_state_info` values.
 | Exporter version | mqvpn version | Notes |
 |-----------------|---------------|-------|
 | 0.1.x | >= 0.5.0 | Requires `get_build_info`, `get_fec_stats` commands (new in v0.5.0). Older mqvpn is not supported — the first RPC of each scrape is `get_build_info`, and its failure aborts the scrape. |
-| (future) 0.2.x | TBD | No breaking changes planned for the control API wire format. Additive fields tolerated. |
 
 **Control API stability:** the `cmd`/`ok`/`error` envelope and all existing
 field names within responses are stable across mqvpn minor and patch releases.
