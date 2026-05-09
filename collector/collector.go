@@ -108,7 +108,12 @@ var (
 	descServerUptime     = prometheus.NewDesc("mqvpn_server_uptime_seconds", "Server uptime in seconds.", nil, nil)
 	descBuildInfo        = prometheus.NewDesc("mqvpn_build_info", "mqvpn build info; value is always 1.", []string{"version", "scheduler"}, nil)
 
-	descClientPaths     = prometheus.NewDesc("mqvpn_client_paths", "Number of paths for this client.", []string{"user"}, nil)
+	descClientPaths = prometheus.NewDesc("mqvpn_client_paths",
+		"All path entries the server reports for this client, including closed/closing slots that xquic has not yet recycled. For active count use mqvpn_client_active_paths.",
+		[]string{"user"}, nil)
+	descClientActivePaths = prometheus.NewDesc("mqvpn_client_active_paths",
+		"Paths in xquic state=active for this client. Excludes init/validating/closing/closed entries that mqvpn_client_paths still counts.",
+		[]string{"user"}, nil)
 	descClientBytesTx   = prometheus.NewDesc("mqvpn_client_bytes_tx_total", "Bytes sent to this client.", []string{"user"}, nil)
 	descClientBytesRx   = prometheus.NewDesc("mqvpn_client_bytes_rx_total", "Bytes received from this client.", []string{"user"}, nil)
 	descClientConnected = prometheus.NewDesc("mqvpn_client_connected_seconds", "Seconds since this client connected.", []string{"user"}, nil)
@@ -232,6 +237,7 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 				ci.User, ci.Endpoint)
 		}
 
+		activePaths := 0
 		for j := range ci.Paths {
 			p := &ci.Paths[j]
 			// mqvpn get_status returns a fixed-size paths array; unused
@@ -268,9 +274,14 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 			if label == "" {
 				label = "unknown"
 			}
+			if label == "active" {
+				activePaths++
+			}
 			ch <- prometheus.MustNewConstMetric(descPathStateInfo, prometheus.GaugeValue, 1,
 				ci.User, pid, label)
 		}
+		ch <- prometheus.MustNewConstMetric(descClientActivePaths, prometheus.GaugeValue,
+			float64(activePaths), ci.User)
 
 		if !fecAvailable {
 			continue

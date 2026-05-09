@@ -177,6 +177,45 @@ func TestCollect_BulkRaceUserMissing_SkipsThatUserOnly(t *testing.T) {
 	}
 }
 
+// Closed paths linger in xquic's paths_info[] until the slot is recycled,
+// so mqvpn_client_paths counts them but mqvpn_client_active_paths must not.
+// A regression here would make the active-paths gauge useless for alerting on
+// path loss (it would still report N even after every path went down).
+func TestCollect_ActivePaths_ExcludesClosedAndValidating(t *testing.T) {
+	fc := &fakeClient{
+		build: &client.BuildInfoResponse{Version: "0.5.0", Scheduler: "wlb", FECEnabled: 0},
+		status: &client.StatusResponse{
+			NClients: 1,
+			Clients: []client.Info{{
+				User: "alice",
+				Paths: []client.PathStats{
+					{PathID: 0, State: 2, StateLabel: "active"},
+					{PathID: 1, State: 4, StateLabel: "closed"},
+					{PathID: 2, State: 1, StateLabel: "validating"},
+					{PathID: 3, State: 2, StateLabel: "active"},
+				},
+			}},
+		},
+		fecErr: client.ErrFECNotBuilt,
+	}
+	coll := New(Config{Source: fc})
+	reg := prometheus.NewRegistry()
+	reg.MustRegister(coll)
+
+	expected := `
+# HELP mqvpn_client_active_paths Paths in xquic state=active for this client. Excludes init/validating/closing/closed entries that mqvpn_client_paths still counts.
+# TYPE mqvpn_client_active_paths gauge
+mqvpn_client_active_paths{user="alice"} 2
+# HELP mqvpn_client_paths All path entries the server reports for this client, including closed/closing slots that xquic has not yet recycled. For active count use mqvpn_client_active_paths.
+# TYPE mqvpn_client_paths gauge
+mqvpn_client_paths{user="alice"} 4
+`
+	if err := testutil.GatherAndCompare(reg, strings.NewReader(expected),
+		"mqvpn_client_active_paths", "mqvpn_client_paths"); err != nil {
+		t.Error(err)
+	}
+}
+
 func TestCollect_IncludeEndpoint_OptIn(t *testing.T) {
 	mkFC := func() *fakeClient {
 		return &fakeClient{

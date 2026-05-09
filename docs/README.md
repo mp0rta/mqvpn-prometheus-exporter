@@ -263,7 +263,8 @@ counter resets transparently.
 
 | Metric | Type | Description |
 |--------|------|-------------|
-| `mqvpn_client_paths` | Gauge | Number of active paths for this client. |
+| `mqvpn_client_paths` | Gauge | All path entries the server reports for this client, including closed/closing slots that xquic has not yet recycled. For active count use `mqvpn_client_active_paths`. |
+| `mqvpn_client_active_paths` | Gauge | Paths in xquic state=active for this client. Excludes init/validating/closing/closed entries. |
 | `mqvpn_client_bytes_tx_total` | Counter | TUN bytes sent to this client. |
 | `mqvpn_client_bytes_rx_total` | Counter | TUN bytes received from this client. |
 | `mqvpn_client_connected_seconds` | Gauge | Seconds since this client connected. |
