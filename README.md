@@ -6,7 +6,7 @@ multipath QUIC VPN server. Polls mqvpn's JSON control API and exposes
 
 ## Install
 
-> **Want everything in one command?** A pre-wired `docker compose` stack
+> **Want monitoring components on container?** A pre-wired `docker compose` stack
 > (exporter + Prometheus + Grafana, datasource and dashboard
 > auto-provisioned) is at
 > [`examples/compose/`](examples/compose/README.md). Linux only.
