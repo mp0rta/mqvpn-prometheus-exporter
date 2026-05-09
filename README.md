@@ -8,8 +8,8 @@ multipath QUIC VPN server. Polls mqvpn's JSON control API and exposes
 
 Pre-built static binaries (linux / darwin × amd64 / arm64) are attached to
 each [GitHub Release](https://github.com/mp0rta/mqvpn-prometheus-exporter/releases).
-Pick the archive matching your OS and CPU
-(`mqvpn-prometheus-exporter_<version>_<os>_<arch>.tar.gz`), then:
+Pick the archive matching your CPU.
+(`mqvpn-prometheus-exporter_<version>_linux_<arch>.tar.gz`), then:
 
 ```
 tar xzf mqvpn-prometheus-exporter_*.tar.gz
@@ -50,7 +50,8 @@ troubleshooting).
 
 ## License
 
-[Apache License 2.0](LICENSE).
+Apache License 2.0
+Copyright (c) 2026 mp0rta
 
 ## Development
 
