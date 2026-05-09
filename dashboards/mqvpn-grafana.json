@@ -389,7 +389,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "mqvpn_client_paths{user=~\"$user\"}",
+          "expr": "count by (user) (mqvpn_path_state_info{user=~\"$user\"})",
           "instant": true,
           "legendFormat": "{{user}}",
           "refId": "A"
