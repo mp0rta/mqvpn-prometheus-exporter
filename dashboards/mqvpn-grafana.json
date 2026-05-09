@@ -195,7 +195,7 @@
       "type": "stat",
       "title": "Uptime",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "x": 20, "y": 1, "w": 4, "h": 4 },
+      "gridPos": { "x": 20, "y": 1, "w": 4, "h": 7 },
       "options": {
         "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
         "orientation": "auto",
@@ -244,35 +244,6 @@
           "expr": "mqvpn_build_info",
           "instant": true,
           "legendFormat": "{{scheduler}}",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "id": 7,
-      "type": "stat",
-      "title": "Uptime (days)",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "x": 20, "y": 5, "w": 4, "h": 3 },
-      "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
-        "orientation": "auto",
-        "textMode": "auto",
-        "colorMode": "value",
-        "graphMode": "none"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "dtdurations",
-          "color": { "mode": "fixed", "fixedColor": "blue" }
-        },
-        "overrides": []
-      },
-      "targets": [
-        {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "mqvpn_server_uptime_seconds * 1000",
-          "instant": true,
           "refId": "A"
         }
       ]
@@ -418,7 +389,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "mqvpn_client_paths{user=~\"$user\"}",
+          "expr": "count by (user) (mqvpn_path_state_info{user=~\"$user\"})",
           "instant": true,
           "legendFormat": "{{user}}",
           "refId": "A"
