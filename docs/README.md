@@ -62,7 +62,7 @@ Open `http://127.0.0.1:9091/metrics` to verify output.
 | `--web.listen-address` | `127.0.0.1:9091` | Address on which to expose `/metrics`. Defaults to loopback. Set to `0.0.0.0:9091` to expose externally — you MUST front with nginx for authentication (see Section 10). |
 | `--mqvpn.address` | `127.0.0.1:9090` | mqvpn control API address (`host:port`). Must be reachable from the exporter process. |
 | `--mqvpn.timeout` | `5s` | Per-RPC timeout when calling mqvpn. Each Prometheus scrape issues a fixed 4 RPCs (build_info cached 60s, get_stats, get_status, get_all_fec_stats) regardless of active-user count. |
-| `--mqvpn.scrape-budget` | `10s` | Total time budget for one full scrape (all RPCs combined). Tuned to stay below your Prometheus `scrape_interval` so a slow scrape does not queue behind the next one. Each scrape is now a fixed 4 RPCs (build_info cached 60s, get_stats, get_status, get_all_fec_stats) regardless of active-user count, so the budget is far less likely to be exhausted than the v0.4-era per-user N+1 pattern. |
+| `--mqvpn.scrape-budget` | `10s` | Single deadline that covers all RPCs in one scrape (implemented as one `context.WithTimeout` shared across calls). Set your Prometheus `scrape_interval` higher than this — if a scrape exhausts the budget, the partial response is still emitted and `mqvpn_exporter_scrape_failures_total` increments. Each scrape is a fixed 4 RPCs (build_info cached 60s, get_stats, get_status, get_all_fec_stats) regardless of active-user count. |
 | `--metrics.include-endpoint` | `false` | If set, emit `mqvpn_client_info{user, endpoint}=1` so PromQL can detect endpoint changes (e.g. NAT rebinding). Off by default — mobile/CGNAT clients can churn endpoints frequently and inflate series cardinality. |
 
 ---
@@ -81,9 +81,17 @@ scrape_configs:
 
 A complete example file is at [`examples/prometheus.yml`](../examples/prometheus.yml).
 
-**Recommended `scrape_interval`:** 15s matches mqvpn's default QUIC CC update
-cadence. Lower intervals (< 5s) will cause concurrent RPCs and elevated
-`mqvpn_exporter_scrape_failures_total` if mqvpn is under load.
+**Recommended `scrape_interval`:** keep it comfortably above
+`--mqvpn.scrape-budget` (default `10s`). 15s is a sensible starting
+point; it matches Prometheus's customary default and leaves headroom
+for the four sequential RPCs even when mqvpn is under load.
+
+If `scrape_interval` ≤ `--mqvpn.scrape-budget`, an occasional slow
+scrape can hit its budget and increment
+`mqvpn_exporter_scrape_failures_total`; Prometheus also will not start
+a new scrape for the same target until the previous one returns, so
+you may see panel gaps. Either raise `scrape_interval` or lower
+`--mqvpn.scrape-budget` to recover.
 
 ---
 
@@ -322,7 +330,7 @@ should resolve to `active` or `closed` within a few RTTs.
 | `active` | Path is fully validated and usable. |
 | `closing` | Path is being gracefully closed (PATH_ABANDONED in flight). |
 | `closed` | Path is closed (terminal). |
-| `unknown` | xquic returned a state value mqvpn does not recognise (xquic enum was extended without an mqvpn label update). |
+| `unknown` | The exporter received a path entry without a `state_label` field (older mqvpn that does not emit it, or an unknown numeric state forwarded by mqvpn's own `default → "unknown"` branch). Treat as a non-actionable diagnostic. |
 
 ### 7.2 `mqvpn_client_mp_state_info` — xquic multipath session state
 
@@ -336,7 +344,7 @@ inspecting individual `mqvpn_path_state_info` values.
 | `active_with_standby` | Multiple validated paths, mix of available + standby — best, full redundancy. |
 | `standby_only` | Only standby paths available — primary down, **degraded**. |
 | `active_only` | Multiple paths, all available, no standby designated. |
-| `unknown` | xquic returned a value mqvpn does not recognise. |
+| `unknown` | The exporter received an FEC entry without an `mp_state_label` field (older mqvpn that does not emit it). mqvpn v0.5.0 always returns one of the four named labels above. |
 
 ---
 
@@ -370,7 +378,7 @@ inspecting individual `mqvpn_path_state_info` values.
 
 | Exporter version | mqvpn version | Notes |
 |-----------------|---------------|-------|
-| 0.1.x | >= 0.5.0 | Requires `get_build_info`, `get_fec_stats` commands (new in v0.5.0). Older mqvpn is not supported — the first RPC of each scrape is `get_build_info`, and its failure aborts the scrape. |
+| 0.1.x | >= 0.5.0 | Requires `get_build_info` and `get_all_fec_stats` (both new in v0.5.0). The first RPC of each scrape is `get_build_info`, and its failure aborts the scrape immediately; `get_status` is the other RPC whose failure aborts the rest of the scrape. `get_stats` and `get_all_fec_stats` are non-fatal — their failures only increment `mqvpn_exporter_scrape_failures_total` and the rest of the scrape continues with a partial response. |
 
 **Control API stability:** the `cmd`/`ok`/`error` envelope and all existing
 field names within responses are stable across mqvpn minor and patch releases.
@@ -430,8 +438,11 @@ One or more RPC calls to mqvpn are failing per scrape. Common causes:
 - **mqvpn restarted**: failures spike on restart, then recover automatically.
 - **Scrape interval too low**: reduce `scrape_interval` to ≥ 15s, or increase `--mqvpn.timeout`.
 - **mqvpn control connection limit hit** (max 8 concurrent): if other tools
-  are calling the control API at the same time, the 9th connection receives an
-  error. Increase `--mqvpn.timeout` to retry or reduce concurrent callers.
+  are calling the control API at the same time, the 9th connection is
+  immediately rejected with `{"ok":false,"error":"too many connections"}`.
+  The exporter does not retry — increasing `--mqvpn.timeout` does **not**
+  help here because the rejection is fast, not slow. Reduce concurrent
+  callers or stagger their scrape schedules.
 
 ### FEC metrics absent from `/metrics`
 
