@@ -6,12 +6,12 @@ multipath QUIC VPN server. Polls mqvpn's JSON control API and exposes
 
 ## Install
 
-> **Want monitoring components on container?** A pre-wired `docker compose` stack
-> (exporter + Prometheus + Grafana, datasource and dashboard
-> auto-provisioned) is at
-> [`examples/compose/`](examples/compose/README.md). Linux only.
+> **Want monitoring components on container?** 
+> A pre-wired `docker compose` stack
+> (exporter + Prometheus + Grafana, datasource
+> and dashboard auto-provisioned) is at [`examples/compose/`](examples/compose/README.md). Linux only.
 
-Pre-built static binaries (linux / darwin × amd64 / arm64) are attached to
+Pre-built static binaries (amd64 / arm64) are attached to
 each [GitHub Release](https://github.com/mp0rta/mqvpn-prometheus-exporter/releases).
 Pick the archive matching your CPU.
 (`mqvpn-prometheus-exporter_<version>_linux_<arch>.tar.gz`), then:
