@@ -4,12 +4,12 @@ Sidecar Prometheus exporter for the [mqvpn](https://github.com/mp0rta/mqvpn)
 multipath QUIC VPN server. Polls mqvpn's JSON control API and exposes
 `/metrics`.
 
+## Install
+
 > **Want everything in one command?** A pre-wired `docker compose` stack
 > (exporter + Prometheus + Grafana, datasource and dashboard
 > auto-provisioned) is at
 > [`examples/compose/`](examples/compose/README.md). Linux only.
-
-## Install
 
 Pre-built static binaries (linux / darwin × amd64 / arm64) are attached to
 each [GitHub Release](https://github.com/mp0rta/mqvpn-prometheus-exporter/releases).
@@ -56,6 +56,7 @@ troubleshooting).
 ## License
 
 Apache License 2.0
+
 Copyright (c) 2026 mp0rta
 
 ## Development
