@@ -195,7 +195,7 @@
       "type": "stat",
       "title": "Uptime",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "x": 20, "y": 1, "w": 4, "h": 4 },
+      "gridPos": { "x": 20, "y": 1, "w": 4, "h": 7 },
       "options": {
         "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
         "orientation": "auto",
