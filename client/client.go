@@ -225,3 +225,55 @@ func (c *Client) GetAllFECStats(ctx context.Context) (*AllFECStatsResponse, erro
 	}
 	return &r, nil
 }
+
+// ErrReorderNotAvailable is returned when the server does not support the
+// get_reorder_stats RPC (mqvpn < 0.8.0 returns "unknown cmd").
+var ErrReorderNotAvailable = errors.New("reorder stats not available")
+
+// ReorderStats holds the aggregate reorder buffer counters returned by
+// get_reorder_stats. All fields are server-wide (summed across connections).
+type ReorderStats struct {
+	GapCount                  uint64  `json:"gap_count"`
+	GapFilledCount            uint64  `json:"gap_filled_count"`
+	GapTimeoutCount           uint64  `json:"gap_timeout_count"`
+	GapOverflowCount          uint64  `json:"gap_overflow_count"`
+	GapDemoteCount            uint64  `json:"gap_demote_count"`
+	GapResetCount             uint64  `json:"gap_reset_count"`
+	AckDemoteCount            uint64  `json:"ack_demote_count"`
+	TooLateDropCount          uint64  `json:"too_late_drop_count"`
+	TooFarAheadDropCount      uint64  `json:"too_far_ahead_drop_count"`
+	DuplicateDropCount        uint64  `json:"duplicate_drop_count"`
+	PoolDropCount             uint64  `json:"pool_drop_count"`
+	PerFlowLimitDropCount     uint64  `json:"per_flow_limit_drop_count"`
+	ResetDiscardCount         uint64  `json:"reset_discard_count"`
+	DeliveredCount            uint64  `json:"delivered_count"`
+	AddedLatencyP99Ms         float64 `json:"added_latency_p99_ms"`
+	AddedLatencyMaxMs         float64 `json:"added_latency_max_ms"`
+	AddedLatencyBufferedP99Ms float64 `json:"added_latency_buffered_p99_ms"`
+}
+
+// ReorderStatsResponse wraps the get_reorder_stats JSON envelope.
+type ReorderStatsResponse struct {
+	baseResponse
+	Reorder ReorderStats `json:"reorder"`
+}
+
+// GetReorderStats returns aggregate reorder buffer statistics.
+// Returns ErrReorderNotAvailable on "unknown cmd" (mqvpn < 0.8.0).
+func (c *Client) GetReorderStats(ctx context.Context) (*ReorderStatsResponse, error) {
+	body, err := c.Call(ctx, []byte(`{"cmd":"get_reorder_stats"}`))
+	if err != nil {
+		return nil, err
+	}
+	var r ReorderStatsResponse
+	if err := json.Unmarshal(body, &r); err != nil {
+		return nil, fmt.Errorf("parse get_reorder_stats response: %w (body=%q)", err, body)
+	}
+	if !r.OK {
+		if r.Error == "unknown cmd" {
+			return nil, ErrReorderNotAvailable
+		}
+		return nil, fmt.Errorf("server error: %s", r.Error)
+	}
+	return &r, nil
+}
