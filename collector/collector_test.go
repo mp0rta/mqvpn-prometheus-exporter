@@ -2,6 +2,7 @@ package collector
 
 import (
 	"context"
+	"errors"
 	"math"
 	"strings"
 	"testing"
@@ -13,11 +14,13 @@ import (
 
 // fakeClient satisfies the collector's Source interface without TCP.
 type fakeClient struct {
-	build  *client.BuildInfoResponse
-	stats  *client.StatsResponse
-	status *client.StatusResponse
-	allFEC *client.AllFECStatsResponse
-	fecErr error
+	build      *client.BuildInfoResponse
+	stats      *client.StatsResponse
+	reorder    *client.ReorderStatsResponse
+	reorderErr error
+	status     *client.StatusResponse
+	allFEC     *client.AllFECStatsResponse
+	fecErr     error
 }
 
 func (f *fakeClient) GetBuildInfo(_ context.Context) (*client.BuildInfoResponse, error) {
@@ -31,6 +34,16 @@ func (f *fakeClient) GetStats(_ context.Context) (*client.StatsResponse, error) 
 		return &client.StatsResponse{}, nil
 	}
 	return f.stats, nil
+}
+
+func (f *fakeClient) GetReorderStats(_ context.Context) (*client.ReorderStatsResponse, error) {
+	if f.reorderErr != nil {
+		return nil, f.reorderErr
+	}
+	if f.reorder == nil {
+		return &client.ReorderStatsResponse{}, nil
+	}
+	return f.reorder, nil
 }
 
 func (f *fakeClient) GetStatus(_ context.Context) (*client.StatusResponse, error) {
@@ -376,5 +389,215 @@ func TestCollect_PathIDSentinelDoesNotDuplicate(t *testing.T) {
 		t.Fatal(err)
 	} else if n != 1 {
 		t.Errorf("expected 1 mqvpn_path_state_info sample (active path only), got %d", n)
+	}
+}
+
+func TestCollect_ReorderStats_HappyPath(t *testing.T) {
+	fc := &fakeClient{
+		build:  &client.BuildInfoResponse{Version: "0.8.0", Scheduler: "wlb", FECEnabled: 0},
+		status: &client.StatusResponse{NClients: 0},
+		fecErr: client.ErrFECNotBuilt,
+		reorder: &client.ReorderStatsResponse{
+			Reorder: client.ReorderStats{
+				GapCount: 100, GapFilledCount: 80, GapTimeoutCount: 10,
+				GapOverflowCount: 5, GapDemoteCount: 3, GapResetCount: 2,
+				AckDemoteCount: 7, TooLateDropCount: 15, TooFarAheadDropCount: 4,
+				DuplicateDropCount: 12, PoolDropCount: 1, PerFlowLimitDropCount: 0,
+				ResetDiscardCount: 3, DeliveredCount: 50000,
+				AddedLatencyP99Ms: 12.345, AddedLatencyMaxMs: 42.1,
+				AddedLatencyBufferedP99Ms: 18.7,
+			},
+		},
+	}
+	coll := New(Config{Source: fc})
+	reg := prometheus.NewRegistry()
+	reg.MustRegister(coll)
+
+	expected := `
+# HELP mqvpn_reorder_ack_demote_total Flows demoted to pass-through by ACK classifier.
+# TYPE mqvpn_reorder_ack_demote_total counter
+mqvpn_reorder_ack_demote_total 7
+# HELP mqvpn_reorder_added_latency_buffered_p99_seconds P99 added latency for packets that actually waited in the reorder buffer (excludes in-order pass-through).
+# TYPE mqvpn_reorder_added_latency_buffered_p99_seconds gauge
+mqvpn_reorder_added_latency_buffered_p99_seconds 0.018699999999999998
+# HELP mqvpn_reorder_added_latency_max_seconds Maximum added latency from reorder buffering.
+# TYPE mqvpn_reorder_added_latency_max_seconds gauge
+mqvpn_reorder_added_latency_max_seconds 0.0421
+# HELP mqvpn_reorder_added_latency_p99_seconds P99 added latency from reorder buffering.
+# TYPE mqvpn_reorder_added_latency_p99_seconds gauge
+mqvpn_reorder_added_latency_p99_seconds 0.012345
+# HELP mqvpn_reorder_delivered_total Packets successfully delivered via reorder buffer.
+# TYPE mqvpn_reorder_delivered_total counter
+mqvpn_reorder_delivered_total 50000
+# HELP mqvpn_reorder_duplicate_drop_total Duplicate packets dropped by reorder buffer.
+# TYPE mqvpn_reorder_duplicate_drop_total counter
+mqvpn_reorder_duplicate_drop_total 12
+# HELP mqvpn_reorder_gap_demote_total Gap episodes ended by ACK demote flush.
+# TYPE mqvpn_reorder_gap_demote_total counter
+mqvpn_reorder_gap_demote_total 3
+# HELP mqvpn_reorder_gap_filled_total Gap episodes closed by the missing sequence arriving.
+# TYPE mqvpn_reorder_gap_filled_total counter
+mqvpn_reorder_gap_filled_total 80
+# HELP mqvpn_reorder_gap_overflow_total Gap episodes ended by overflow flush.
+# TYPE mqvpn_reorder_gap_overflow_total counter
+mqvpn_reorder_gap_overflow_total 5
+# HELP mqvpn_reorder_gap_reset_total Gap episodes ended by flow reset discard.
+# TYPE mqvpn_reorder_gap_reset_total counter
+mqvpn_reorder_gap_reset_total 2
+# HELP mqvpn_reorder_gap_timeout_total Gap episodes ended by timeout skip.
+# TYPE mqvpn_reorder_gap_timeout_total counter
+mqvpn_reorder_gap_timeout_total 10
+# HELP mqvpn_reorder_gap_total Gap episodes opened (buffer went empty to nonempty).
+# TYPE mqvpn_reorder_gap_total counter
+mqvpn_reorder_gap_total 100
+# HELP mqvpn_reorder_per_flow_limit_drop_total Packets dropped due to per-flow buffer cap.
+# TYPE mqvpn_reorder_per_flow_limit_drop_total counter
+mqvpn_reorder_per_flow_limit_drop_total 0
+# HELP mqvpn_reorder_pool_drop_total Packets dropped due to global buffer pool exhaustion.
+# TYPE mqvpn_reorder_pool_drop_total counter
+mqvpn_reorder_pool_drop_total 1
+# HELP mqvpn_reorder_reset_discard_total Buffered packets discarded on flow reset.
+# TYPE mqvpn_reorder_reset_discard_total counter
+mqvpn_reorder_reset_discard_total 3
+# HELP mqvpn_reorder_too_far_ahead_drop_total Packets dropped as too far ahead of the expected sequence.
+# TYPE mqvpn_reorder_too_far_ahead_drop_total counter
+mqvpn_reorder_too_far_ahead_drop_total 4
+# HELP mqvpn_reorder_too_late_drop_total Packets dropped as too late (sequence behind delivery window).
+# TYPE mqvpn_reorder_too_late_drop_total counter
+mqvpn_reorder_too_late_drop_total 15
+`
+	if err := testutil.GatherAndCompare(reg, strings.NewReader(expected),
+		"mqvpn_reorder_delivered_total", "mqvpn_reorder_too_late_drop_total",
+		"mqvpn_reorder_too_far_ahead_drop_total", "mqvpn_reorder_duplicate_drop_total",
+		"mqvpn_reorder_pool_drop_total", "mqvpn_reorder_per_flow_limit_drop_total",
+		"mqvpn_reorder_reset_discard_total", "mqvpn_reorder_gap_total",
+		"mqvpn_reorder_gap_filled_total", "mqvpn_reorder_gap_timeout_total",
+		"mqvpn_reorder_gap_overflow_total", "mqvpn_reorder_gap_demote_total",
+		"mqvpn_reorder_gap_reset_total", "mqvpn_reorder_ack_demote_total",
+		"mqvpn_reorder_added_latency_p99_seconds", "mqvpn_reorder_added_latency_max_seconds",
+		"mqvpn_reorder_added_latency_buffered_p99_seconds"); err != nil {
+		t.Error(err)
+	}
+}
+
+func TestCollect_ReorderStats_NotAvailable(t *testing.T) {
+	fc := &fakeClient{
+		build:      &client.BuildInfoResponse{Version: "0.7.0", Scheduler: "wlb", FECEnabled: 0},
+		status:     &client.StatusResponse{NClients: 0},
+		fecErr:     client.ErrFECNotBuilt,
+		reorderErr: client.ErrReorderNotAvailable,
+	}
+	coll := New(Config{Source: fc})
+	reg := prometheus.NewRegistry()
+	reg.MustRegister(coll)
+
+	// scrapeFailures should NOT increment for sentinel error. Check first
+	// to avoid double-Gather counter inflation.
+	expected := `
+# HELP mqvpn_exporter_scrape_failures_total Number of individual mqvpn RPC calls that failed during scrapes. A single scrape can contribute multiple failures.
+# TYPE mqvpn_exporter_scrape_failures_total counter
+mqvpn_exporter_scrape_failures_total 0
+`
+	if err := testutil.GatherAndCompare(reg, strings.NewReader(expected),
+		"mqvpn_exporter_scrape_failures_total"); err != nil {
+		t.Error(err)
+	}
+
+	n, err := testutil.GatherAndCount(reg, "mqvpn_reorder_delivered_total")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Errorf("expected 0 reorder metrics when not available, got %d", n)
+	}
+}
+
+func TestCollect_ReorderStats_GenericError(t *testing.T) {
+	fc := &fakeClient{
+		build:  &client.BuildInfoResponse{Version: "0.8.0", Scheduler: "wlb", FECEnabled: 1},
+		status: &client.StatusResponse{NClients: 1, Clients: []client.Info{{User: "alice", Paths: nil}}},
+		allFEC: &client.AllFECStatsResponse{
+			NClients: 1,
+			Clients: []client.FECStatsEntry{{
+				User: "alice", EnableFEC: 1, MPStateLabel: "single_path",
+				FECSendCnt: 5,
+			}},
+		},
+		reorderErr: errors.New("connection refused"),
+	}
+	coll := New(Config{Source: fc})
+	reg := prometheus.NewRegistry()
+	reg.MustRegister(coll)
+
+	// scrapeFailures SHOULD increment for non-sentinel error. Check FIRST
+	// (single Gather = single Collect = scrapeFailures incremented once).
+	expected := `
+# HELP mqvpn_exporter_scrape_failures_total Number of individual mqvpn RPC calls that failed during scrapes. A single scrape can contribute multiple failures.
+# TYPE mqvpn_exporter_scrape_failures_total counter
+mqvpn_exporter_scrape_failures_total 1
+`
+	if err := testutil.GatherAndCompare(reg, strings.NewReader(expected),
+		"mqvpn_exporter_scrape_failures_total"); err != nil {
+		t.Error(err)
+	}
+
+	// Reorder metrics absent (second Gather, scrapeFailures now 2, but we
+	// only filter on reorder metrics here so the counter value is irrelevant).
+	n, err := testutil.GatherAndCount(reg, "mqvpn_reorder_delivered_total")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Errorf("expected 0 reorder metrics on generic error, got %d", n)
+	}
+
+	// Per-client metrics should still be emitted (get_status succeeded).
+	n, err = testutil.GatherAndCount(reg, "mqvpn_client_paths")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Errorf("expected 1 mqvpn_client_paths (alice) despite reorder error, got %d", n)
+	}
+
+	// FEC metrics should still be emitted (get_all_fec_stats succeeded).
+	n, err = testutil.GatherAndCount(reg, "mqvpn_client_fec_send_total")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Errorf("expected 1 mqvpn_client_fec_send_total (alice) despite reorder error, got %d", n)
+	}
+}
+
+func TestCollect_ReorderStats_AllZero(t *testing.T) {
+	fc := &fakeClient{
+		build:  &client.BuildInfoResponse{Version: "0.8.0", Scheduler: "wlb", FECEnabled: 0},
+		status: &client.StatusResponse{NClients: 0},
+		fecErr: client.ErrFECNotBuilt,
+		reorder: &client.ReorderStatsResponse{
+			Reorder: client.ReorderStats{},
+		},
+	}
+	coll := New(Config{Source: fc})
+	reg := prometheus.NewRegistry()
+	reg.MustRegister(coll)
+
+	// Zero-valued counters must still be emitted, not skipped.
+	n, err := testutil.GatherAndCount(reg,
+		"mqvpn_reorder_delivered_total", "mqvpn_reorder_too_late_drop_total",
+		"mqvpn_reorder_too_far_ahead_drop_total", "mqvpn_reorder_duplicate_drop_total",
+		"mqvpn_reorder_pool_drop_total", "mqvpn_reorder_per_flow_limit_drop_total",
+		"mqvpn_reorder_reset_discard_total", "mqvpn_reorder_gap_total",
+		"mqvpn_reorder_gap_filled_total", "mqvpn_reorder_gap_timeout_total",
+		"mqvpn_reorder_gap_overflow_total", "mqvpn_reorder_gap_demote_total",
+		"mqvpn_reorder_gap_reset_total", "mqvpn_reorder_ack_demote_total",
+		"mqvpn_reorder_added_latency_p99_seconds", "mqvpn_reorder_added_latency_max_seconds",
+		"mqvpn_reorder_added_latency_buffered_p99_seconds")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 17 {
+		t.Errorf("expected 17 zero-valued reorder metrics, got %d", n)
 	}
 }
