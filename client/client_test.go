@@ -185,3 +185,96 @@ func TestGetStatus_StateLabelDecoded(t *testing.T) {
 		t.Errorf("state_label: %q", s.Clients[0].Paths[0].StateLabel)
 	}
 }
+
+func TestGetReorderStats_OK(t *testing.T) {
+	resp := `{"ok":true,"reorder":{
+		"gap_count":100,"gap_filled_count":80,"gap_timeout_count":10,
+		"gap_overflow_count":5,"gap_demote_count":3,"gap_reset_count":2,
+		"ack_demote_count":7,"too_late_drop_count":15,"too_far_ahead_drop_count":4,
+		"duplicate_drop_count":12,"pool_drop_count":1,"per_flow_limit_drop_count":0,
+		"reset_discard_count":3,"delivered_count":50000,
+		"added_latency_p99_ms":12.345,"added_latency_max_ms":42.100,
+		"added_latency_buffered_p99_ms":18.700}}`
+	addr, stop := startMock(t, resp)
+	defer stop()
+	c := New(addr, 2*time.Second)
+	r, err := c.GetReorderStats(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rs := r.Reorder
+	if rs.GapCount != 100 {
+		t.Errorf("gap_count: got %d", rs.GapCount)
+	}
+	if rs.GapFilledCount != 80 {
+		t.Errorf("gap_filled_count: got %d", rs.GapFilledCount)
+	}
+	if rs.GapTimeoutCount != 10 {
+		t.Errorf("gap_timeout_count: got %d", rs.GapTimeoutCount)
+	}
+	if rs.GapOverflowCount != 5 {
+		t.Errorf("gap_overflow_count: got %d", rs.GapOverflowCount)
+	}
+	if rs.GapDemoteCount != 3 {
+		t.Errorf("gap_demote_count: got %d", rs.GapDemoteCount)
+	}
+	if rs.GapResetCount != 2 {
+		t.Errorf("gap_reset_count: got %d", rs.GapResetCount)
+	}
+	if rs.AckDemoteCount != 7 {
+		t.Errorf("ack_demote_count: got %d", rs.AckDemoteCount)
+	}
+	if rs.TooLateDropCount != 15 {
+		t.Errorf("too_late_drop_count: got %d", rs.TooLateDropCount)
+	}
+	if rs.TooFarAheadDropCount != 4 {
+		t.Errorf("too_far_ahead_drop_count: got %d", rs.TooFarAheadDropCount)
+	}
+	if rs.DuplicateDropCount != 12 {
+		t.Errorf("duplicate_drop_count: got %d", rs.DuplicateDropCount)
+	}
+	if rs.PoolDropCount != 1 {
+		t.Errorf("pool_drop_count: got %d", rs.PoolDropCount)
+	}
+	if rs.PerFlowLimitDropCount != 0 {
+		t.Errorf("per_flow_limit_drop_count: got %d", rs.PerFlowLimitDropCount)
+	}
+	if rs.ResetDiscardCount != 3 {
+		t.Errorf("reset_discard_count: got %d", rs.ResetDiscardCount)
+	}
+	if rs.DeliveredCount != 50000 {
+		t.Errorf("delivered_count: got %d", rs.DeliveredCount)
+	}
+	if rs.AddedLatencyP99Ms != 12.345 {
+		t.Errorf("added_latency_p99_ms: got %f", rs.AddedLatencyP99Ms)
+	}
+	if rs.AddedLatencyMaxMs != 42.1 {
+		t.Errorf("added_latency_max_ms: got %f", rs.AddedLatencyMaxMs)
+	}
+	if rs.AddedLatencyBufferedP99Ms != 18.7 {
+		t.Errorf("added_latency_buffered_p99_ms: got %f", rs.AddedLatencyBufferedP99Ms)
+	}
+}
+
+func TestGetReorderStats_UnknownCmd(t *testing.T) {
+	addr, stop := startMock(t, `{"ok":false,"error":"unknown cmd"}`)
+	defer stop()
+	c := New(addr, 2*time.Second)
+	_, err := c.GetReorderStats(context.Background())
+	if !errors.Is(err, ErrReorderNotAvailable) {
+		t.Errorf("expected ErrReorderNotAvailable, got %v", err)
+	}
+}
+
+func TestGetReorderStats_ServerError(t *testing.T) {
+	addr, stop := startMock(t, `{"ok":false,"error":"internal error"}`)
+	defer stop()
+	c := New(addr, 2*time.Second)
+	_, err := c.GetReorderStats(context.Background())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if errors.Is(err, ErrReorderNotAvailable) {
+		t.Error("should not be ErrReorderNotAvailable for internal error")
+	}
+}

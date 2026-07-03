@@ -61,8 +61,8 @@ Open `http://127.0.0.1:9091/metrics` to verify output.
 |------|---------|-------------|
 | `--web.listen-address` | `127.0.0.1:9091` | Address on which to expose `/metrics`. Defaults to loopback. Set to `0.0.0.0:9091` to expose externally — you MUST front with nginx for authentication (see Section 10). |
 | `--mqvpn.address` | `127.0.0.1:9090` | mqvpn control API address (`host:port`). Must be reachable from the exporter process. |
-| `--mqvpn.timeout` | `5s` | Per-RPC timeout when calling mqvpn. Each Prometheus scrape issues a fixed 4 RPCs (build_info cached 60s, get_stats, get_status, get_all_fec_stats) regardless of active-user count. |
-| `--mqvpn.scrape-budget` | `10s` | Single deadline that covers all RPCs in one scrape (implemented as one `context.WithTimeout` shared across calls). Set your Prometheus `scrape_interval` higher than this — if a scrape exhausts the budget, the partial response is still emitted and `mqvpn_exporter_scrape_failures_total` increments. Each scrape is a fixed 4 RPCs (build_info cached 60s, get_stats, get_status, get_all_fec_stats) regardless of active-user count. |
+| `--mqvpn.timeout` | `5s` | Per-RPC timeout when calling mqvpn. Each Prometheus scrape issues a fixed 5 RPCs (build_info cached 60s, get_stats, get_reorder_stats, get_status, get_all_fec_stats) regardless of active-user count. |
+| `--mqvpn.scrape-budget` | `10s` | Single deadline that covers all RPCs in one scrape (implemented as one `context.WithTimeout` shared across calls). Set your Prometheus `scrape_interval` higher than this — if a scrape exhausts the budget, the partial response is still emitted and `mqvpn_exporter_scrape_failures_total` increments. Each scrape is a fixed 5 RPCs (build_info cached 60s, get_stats, get_reorder_stats, get_status, get_all_fec_stats) regardless of active-user count. |
 | `--metrics.include-endpoint` | `false` | If set, emit `mqvpn_client_info{user, endpoint}=1` so PromQL can detect endpoint changes (e.g. NAT rebinding). Off by default — mobile/CGNAT clients can churn endpoints frequently and inflate series cardinality. |
 
 ---
@@ -84,7 +84,7 @@ A complete example file is at [`examples/prometheus.yml`](../examples/prometheus
 **Recommended `scrape_interval`:** keep it comfortably above
 `--mqvpn.scrape-budget` (default `10s`). 15s is a sensible starting
 point; it matches Prometheus's customary default and leaves headroom
-for the four sequential RPCs even when mqvpn is under load.
+for the five sequential RPCs even when mqvpn is under load.
 
 If `scrape_interval` ≤ `--mqvpn.scrape-budget`, an occasional slow
 scrape can hit its budget and increment
@@ -225,10 +225,11 @@ that mode plus update / wipe / backup operations.
 4. Select your Prometheus datasource when prompted for `DS_PROMETHEUS`.
 5. Click **Import**.
 
-The dashboard uses three rows:
+The dashboard uses four rows:
 - **Row 1 — Server Overview** (always visible): connected clients, TX/RX throughput, server loss rate, uptime, active scheduler.
 - **Row 2 — Per-User / Per-Path** (all schedulers): per-path TX, RX, SRTT, packet loss rate, paths-per-user stat.
 - **Row 3 — Backup-FEC** (collapsed by default): FEC recovery ratio, standby-path byte ratio, FEC repair packets/sec, FEC negotiated indicator. Expand only when the `backup_fec` scheduler is active.
+- **Row 4 — Reorder Buffer** (collapsed by default): delivery rate, drop rate breakdown, gap resolution, added latency. Requires mqvpn >= 0.8.0.
 
 ### Template variables
 
@@ -259,7 +260,33 @@ counter resets transparently.
 | `mqvpn_server_uptime_seconds` | Gauge | Seconds since `mqvpn_server_create()` was called. |
 | `mqvpn_build_info` | Gauge (1) | Build metadata; value always 1. Labels: `version`, `scheduler`. |
 
-### 6.2 Per-client (label: `user`)
+### 6.2 Reorder buffer — server-wide (no labels; requires mqvpn >= 0.8.0)
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `mqvpn_reorder_delivered_total` | Counter | Packets successfully delivered via reorder buffer. |
+| `mqvpn_reorder_too_late_drop_total` | Counter | Packets dropped as too late (sequence behind delivery window). |
+| `mqvpn_reorder_too_far_ahead_drop_total` | Counter | Packets dropped as too far ahead of the expected sequence. |
+| `mqvpn_reorder_duplicate_drop_total` | Counter | Duplicate packets dropped by reorder buffer. |
+| `mqvpn_reorder_pool_drop_total` | Counter | Packets dropped due to global buffer pool exhaustion. |
+| `mqvpn_reorder_per_flow_limit_drop_total` | Counter | Packets dropped due to per-flow buffer cap. |
+| `mqvpn_reorder_reset_discard_total` | Counter | Buffered packets discarded on flow reset. |
+| `mqvpn_reorder_gap_total` | Counter | Gap episodes opened (buffer went empty to nonempty). |
+| `mqvpn_reorder_gap_filled_total` | Counter | Gap episodes closed by the missing sequence arriving. |
+| `mqvpn_reorder_gap_timeout_total` | Counter | Gap episodes ended by timeout skip. |
+| `mqvpn_reorder_gap_overflow_total` | Counter | Gap episodes ended by overflow flush. |
+| `mqvpn_reorder_gap_demote_total` | Counter | Gap episodes ended by ACK demote flush. |
+| `mqvpn_reorder_gap_reset_total` | Counter | Gap episodes ended by flow reset discard. |
+| `mqvpn_reorder_ack_demote_total` | Counter | Flows demoted to pass-through by ACK classifier. |
+| `mqvpn_reorder_added_latency_p99_seconds` | Gauge | P99 added latency from reorder buffering. |
+| `mqvpn_reorder_added_latency_max_seconds` | Gauge | Maximum added latency from reorder buffering. |
+| `mqvpn_reorder_added_latency_buffered_p99_seconds` | Gauge | P99 added latency for packets that actually waited in the reorder buffer (excludes in-order pass-through). |
+
+When mqvpn < 0.8.0 or the server does not support `get_reorder_stats`, all
+`mqvpn_reorder_*` metrics are silently omitted from `/metrics`. This is
+expected — use `unless` or `or` in PromQL rules to tolerate absent series.
+
+### 6.3 Per-client (label: `user`)
 
 | Metric | Type | Description |
 |--------|------|-------------|
@@ -270,7 +297,7 @@ counter resets transparently.
 | `mqvpn_client_connected_seconds` | Gauge | Seconds since this client connected. |
 | `mqvpn_client_info` | Gauge (1) | Per-client metadata (opt-in via `--metrics.include-endpoint`). Labels: `user`, `endpoint`. Value always 1. |
 
-### 6.3 Per-path (labels: `user`, `path_id`)
+### 6.4 Per-path (labels: `user`, `path_id`)
 
 | Metric | Type | Description |
 |--------|------|-------------|
@@ -285,7 +312,7 @@ counter resets transparently.
 | `mqvpn_path_pkt_lost_total` | Counter | QUIC packets declared lost on this path. |
 | `mqvpn_path_state_info` | Gauge (1) | xquic transport path state as a label; value always 1. Extra label `state` is one of `init`, `validating`, `active`, `closing`, `closed`, `unknown` (see §7). |
 
-### 6.4 Per-client FEC (label: `user`; requires `backup_fec` scheduler + FEC build)
+### 6.5 Per-client FEC (label: `user`; requires `backup_fec` scheduler + FEC build)
 
 | Metric | Type | Description |
 |--------|------|-------------|
@@ -297,7 +324,7 @@ counter resets transparently.
 | `mqvpn_client_standby_app_bytes_total` | Counter | Application bytes delivered via standby path. |
 | `mqvpn_client_mp_state_info` | Gauge (1) | xquic multipath state as a label; value always 1. Extra label `state` is one of `single_path`, `active_with_standby`, `standby_only`, `active_only`, `unknown` (see §7). |
 
-### 6.5 Exporter self-stats (no labels)
+### 6.6 Exporter self-stats (no labels)
 
 | Metric | Type | Description |
 |--------|------|-------------|
@@ -380,6 +407,7 @@ inspecting individual `mqvpn_path_state_info` values.
 | Exporter version | mqvpn version | Notes |
 |-----------------|---------------|-------|
 | 0.1.x | >= 0.5.0 | Requires `get_build_info` and `get_all_fec_stats` (both new in v0.5.0). The first RPC of each scrape is `get_build_info`, and its failure aborts the scrape immediately; `get_status` is the other RPC whose failure aborts the rest of the scrape. `get_stats` and `get_all_fec_stats` are non-fatal — their failures only increment `mqvpn_exporter_scrape_failures_total` and the rest of the scrape continues with a partial response. |
+| 0.2.x | >= 0.5.0; reorder metrics require >= 0.8.0 | Adds 17 `mqvpn_reorder_*` metrics from `get_reorder_stats`. On mqvpn < 0.8.0, the RPC returns `"unknown cmd"` and reorder metrics are silently omitted; the exporter functions normally otherwise. `get_build_info`, `get_stats`, `get_status`, and `get_all_fec_stats` RPCs are unchanged. |
 
 **Control API stability:** the `cmd`/`ok`/`error` envelope and all existing
 field names within responses are stable across mqvpn minor and patch releases.

@@ -1,9 +1,10 @@
 // Package collector implements the prometheus.Collector for mqvpn metrics.
 //
-// One Collect call performs four mqvpn JSON RPCs (constant, regardless of
+// One Collect call performs five mqvpn JSON RPCs (constant, regardless of
 // active-user count): get_build_info (cached 60s), get_stats (server-wide
-// counters + uptime), get_status (per-client + per-path), and the bulk
-// get_all_fec_stats (per-user FEC + multipath state). All metrics are
+// counters + uptime), get_reorder_stats (server-wide reorder buffer),
+// get_status (per-client + per-path), and the bulk get_all_fec_stats
+// (per-user FEC + multipath state). All metrics are
 // produced as const metrics — no persistent gauges, no scrape-to-scrape
 // state beyond the build_info cache and exporter self-stats.
 package collector
@@ -25,6 +26,7 @@ import (
 type Source interface {
 	GetBuildInfo(ctx context.Context) (*client.BuildInfoResponse, error)
 	GetStats(ctx context.Context) (*client.StatsResponse, error)
+	GetReorderStats(ctx context.Context) (*client.ReorderStatsResponse, error)
 	GetStatus(ctx context.Context) (*client.StatusResponse, error)
 	GetAllFECStats(ctx context.Context) (*client.AllFECStatsResponse, error)
 }
@@ -106,7 +108,29 @@ var (
 	descServerDgramLost  = prometheus.NewDesc("mqvpn_server_dgram_lost_total", "QUIC datagrams lost (server-observed, server-wide aggregate; not algebraically related to sum of mqvpn_client_lost_dgram_total).", nil, nil)
 	descServerDgramAcked = prometheus.NewDesc("mqvpn_server_dgram_acked_total", "QUIC datagrams acknowledged.", nil, nil)
 	descServerUptime     = prometheus.NewDesc("mqvpn_server_uptime_seconds", "Server uptime in seconds.", nil, nil)
-	descBuildInfo        = prometheus.NewDesc("mqvpn_build_info", "mqvpn build info; value is always 1.", []string{"version", "scheduler"}, nil)
+
+	// Reorder buffer metrics — server-wide aggregate from get_reorder_stats.
+	// Dedicated mqvpn_reorder_ namespace (not mqvpn_server_reorder_) because
+	// reorder is a distinct subsystem with 17 metrics.
+	descReorderDelivered          = prometheus.NewDesc("mqvpn_reorder_delivered_total", "Packets successfully delivered via reorder buffer.", nil, nil)
+	descReorderTooLateDrop        = prometheus.NewDesc("mqvpn_reorder_too_late_drop_total", "Packets dropped as too late (sequence behind delivery window).", nil, nil)
+	descReorderTooFarAheadDrop    = prometheus.NewDesc("mqvpn_reorder_too_far_ahead_drop_total", "Packets dropped as too far ahead of the expected sequence.", nil, nil)
+	descReorderDuplicateDrop      = prometheus.NewDesc("mqvpn_reorder_duplicate_drop_total", "Duplicate packets dropped by reorder buffer.", nil, nil)
+	descReorderPoolDrop           = prometheus.NewDesc("mqvpn_reorder_pool_drop_total", "Packets dropped due to global buffer pool exhaustion.", nil, nil)
+	descReorderPerFlowLimitDrop   = prometheus.NewDesc("mqvpn_reorder_per_flow_limit_drop_total", "Packets dropped due to per-flow buffer cap.", nil, nil)
+	descReorderResetDiscard       = prometheus.NewDesc("mqvpn_reorder_reset_discard_total", "Buffered packets discarded on flow reset.", nil, nil)
+	descReorderGap                = prometheus.NewDesc("mqvpn_reorder_gap_total", "Gap episodes opened (buffer went empty to nonempty).", nil, nil)
+	descReorderGapFilled          = prometheus.NewDesc("mqvpn_reorder_gap_filled_total", "Gap episodes closed by the missing sequence arriving.", nil, nil)
+	descReorderGapTimeout         = prometheus.NewDesc("mqvpn_reorder_gap_timeout_total", "Gap episodes ended by timeout skip.", nil, nil)
+	descReorderGapOverflow        = prometheus.NewDesc("mqvpn_reorder_gap_overflow_total", "Gap episodes ended by overflow flush.", nil, nil)
+	descReorderGapDemote          = prometheus.NewDesc("mqvpn_reorder_gap_demote_total", "Gap episodes ended by ACK demote flush.", nil, nil)
+	descReorderGapReset           = prometheus.NewDesc("mqvpn_reorder_gap_reset_total", "Gap episodes ended by flow reset discard.", nil, nil)
+	descReorderAckDemote          = prometheus.NewDesc("mqvpn_reorder_ack_demote_total", "Flows demoted to pass-through by ACK classifier.", nil, nil)
+	descReorderLatencyP99         = prometheus.NewDesc("mqvpn_reorder_added_latency_p99_seconds", "P99 added latency from reorder buffering.", nil, nil)
+	descReorderLatencyMax         = prometheus.NewDesc("mqvpn_reorder_added_latency_max_seconds", "Maximum added latency from reorder buffering.", nil, nil)
+	descReorderLatencyBufferedP99 = prometheus.NewDesc("mqvpn_reorder_added_latency_buffered_p99_seconds", "P99 added latency for packets that actually waited in the reorder buffer (excludes in-order pass-through).", nil, nil)
+
+	descBuildInfo = prometheus.NewDesc("mqvpn_build_info", "mqvpn build info; value is always 1.", []string{"version", "scheduler"}, nil)
 
 	descClientPaths = prometheus.NewDesc("mqvpn_client_paths",
 		"All path entries the server reports for this client, including closed/closing slots that xquic has not yet recycled. For active count use mqvpn_client_active_paths.",
@@ -145,8 +169,9 @@ var (
 		[]string{"user", "path_id", "state"}, nil)
 )
 
-// Collect performs one scrape against mqvpn (build_info / stats / status /
-// all_fec_stats) and emits the corresponding const metrics on ch. Failed
+// Collect performs one scrape against mqvpn (build_info / stats /
+// reorder_stats / status / all_fec_stats) and emits the corresponding
+// const metrics on ch. Failed
 // RPCs increment scrapeFailures and log the cause; a partial scrape still
 // emits whatever it could collect.
 func (c *Collector) Collect(ch chan<- prometheus.Metric) {
@@ -189,6 +214,33 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 		ch <- prometheus.MustNewConstMetric(descServerDgramLost, prometheus.CounterValue, float64(serverStats.DgramLost))
 		ch <- prometheus.MustNewConstMetric(descServerDgramAcked, prometheus.CounterValue, float64(serverStats.DgramAcked))
 		ch <- prometheus.MustNewConstMetric(descServerUptime, prometheus.GaugeValue, float64(serverStats.UptimeSec))
+	}
+
+	// Reorder buffer stats — server-wide aggregate (mqvpn >= 0.8.0).
+	if reorderResp, err := c.src.GetReorderStats(ctx); err == nil {
+		rs := reorderResp.Reorder
+		ch <- prometheus.MustNewConstMetric(descReorderDelivered, prometheus.CounterValue, float64(rs.DeliveredCount))
+		ch <- prometheus.MustNewConstMetric(descReorderTooLateDrop, prometheus.CounterValue, float64(rs.TooLateDropCount))
+		ch <- prometheus.MustNewConstMetric(descReorderTooFarAheadDrop, prometheus.CounterValue, float64(rs.TooFarAheadDropCount))
+		ch <- prometheus.MustNewConstMetric(descReorderDuplicateDrop, prometheus.CounterValue, float64(rs.DuplicateDropCount))
+		ch <- prometheus.MustNewConstMetric(descReorderPoolDrop, prometheus.CounterValue, float64(rs.PoolDropCount))
+		ch <- prometheus.MustNewConstMetric(descReorderPerFlowLimitDrop, prometheus.CounterValue, float64(rs.PerFlowLimitDropCount))
+		ch <- prometheus.MustNewConstMetric(descReorderResetDiscard, prometheus.CounterValue, float64(rs.ResetDiscardCount))
+		ch <- prometheus.MustNewConstMetric(descReorderGap, prometheus.CounterValue, float64(rs.GapCount))
+		ch <- prometheus.MustNewConstMetric(descReorderGapFilled, prometheus.CounterValue, float64(rs.GapFilledCount))
+		ch <- prometheus.MustNewConstMetric(descReorderGapTimeout, prometheus.CounterValue, float64(rs.GapTimeoutCount))
+		ch <- prometheus.MustNewConstMetric(descReorderGapOverflow, prometheus.CounterValue, float64(rs.GapOverflowCount))
+		ch <- prometheus.MustNewConstMetric(descReorderGapDemote, prometheus.CounterValue, float64(rs.GapDemoteCount))
+		ch <- prometheus.MustNewConstMetric(descReorderGapReset, prometheus.CounterValue, float64(rs.GapResetCount))
+		ch <- prometheus.MustNewConstMetric(descReorderAckDemote, prometheus.CounterValue, float64(rs.AckDemoteCount))
+		ch <- prometheus.MustNewConstMetric(descReorderLatencyP99, prometheus.GaugeValue, rs.AddedLatencyP99Ms/1000.0)
+		ch <- prometheus.MustNewConstMetric(descReorderLatencyMax, prometheus.GaugeValue, rs.AddedLatencyMaxMs/1000.0)
+		ch <- prometheus.MustNewConstMetric(descReorderLatencyBufferedP99, prometheus.GaugeValue, rs.AddedLatencyBufferedP99Ms/1000.0)
+	} else if errors.Is(err, client.ErrReorderNotAvailable) {
+		log.Printf("scrape: reorder stats not available (mqvpn < 0.8.0); omitting reorder metrics")
+	} else {
+		c.scrapeFailures.Inc()
+		log.Printf("scrape: get_reorder_stats: %v", err)
 	}
 
 	st, err := c.src.GetStatus(ctx)
