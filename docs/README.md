@@ -419,9 +419,9 @@ inspecting individual `mqvpn_path_state_info` values.
 
 | Exporter version | mqvpn version | Notes |
 |-----------------|---------------|-------|
-| 0.1.x | >= 0.5.0 | Requires `get_build_info` and `get_all_fec_stats` (both new in v0.5.0). The first RPC of each scrape is `get_build_info`, and its failure aborts the scrape immediately; `get_status` is the other RPC whose failure aborts the rest of the scrape. `get_stats` and `get_all_fec_stats` are non-fatal — their failures only increment `mqvpn_exporter_scrape_failures_total` and the rest of the scrape continues with a partial response. |
-| 0.2.x | >= 0.5.0; reorder metrics require >= 0.8.0 | Adds 17 `mqvpn_reorder_*` metrics from `get_reorder_stats`. On mqvpn < 0.8.0, the RPC returns `"unknown cmd"` and reorder metrics are silently omitted; the exporter functions normally otherwise. `get_build_info`, `get_stats`, `get_status`, and `get_all_fec_stats` RPCs are unchanged. |
-| 0.3.x | >= 0.5.0; reorder metrics require >= 0.8.0; hybrid metrics require >= 0.9.0 | Adds 3 `mqvpn_hybrid_tcp_flows_*` metrics from the hybrid-mode extension to `get_stats`. These are additive JSON fields, so on mqvpn < 0.9.0 they are absent and read 0 (always emitted, no version gate). All other RPCs unchanged. |
+| 0.1.0 | >= 0.5.0 | Requires `get_build_info` and `get_all_fec_stats` (both new in v0.5.0). The first RPC of each scrape is `get_build_info`, and its failure aborts the scrape immediately; `get_status` is the other RPC whose failure aborts the rest of the scrape. `get_stats` and `get_all_fec_stats` are non-fatal — their failures only increment `mqvpn_exporter_scrape_failures_total` and the rest of the scrape continues with a partial response. |
+| 0.2.0 | >= 0.5.0; reorder metrics require >= 0.8.0 | Adds 17 `mqvpn_reorder_*` metrics from `get_reorder_stats`. On mqvpn < 0.8.0, the RPC returns `"unknown cmd"` and reorder metrics are silently omitted; the exporter functions normally otherwise. `get_build_info`, `get_stats`, `get_status`, and `get_all_fec_stats` RPCs are unchanged. |
+| 0.3.0 | >= 0.5.0; reorder metrics require >= 0.8.0; hybrid metrics require >= 0.9.0 | Adds 3 `mqvpn_hybrid_tcp_flows_*` metrics from the hybrid-mode extension to `get_stats`. These are additive JSON fields, so on mqvpn < 0.9.0 they are absent and read 0 (always emitted, no version gate). All other RPCs unchanged. |
 
 **Control API stability:** the `cmd`/`ok`/`error` envelope and all existing
 field names within responses are stable across mqvpn minor and patch releases.
