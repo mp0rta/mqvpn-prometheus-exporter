@@ -130,6 +130,12 @@ var (
 	descReorderLatencyMax         = prometheus.NewDesc("mqvpn_reorder_added_latency_max_seconds", "Maximum added latency from reorder buffering.", nil, nil)
 	descReorderLatencyBufferedP99 = prometheus.NewDesc("mqvpn_reorder_added_latency_buffered_p99_seconds", "P99 added latency for packets that actually waited in the reorder buffer (excludes in-order pass-through).", nil, nil)
 
+	// Hybrid mode (TCP lane) — server-wide from get_stats (mqvpn >= 0.9.0).
+	// Client-only fields not decoded — see client.StatsResponse.
+	descHybridFlowsActive   = prometheus.NewDesc("mqvpn_hybrid_tcp_flows_active", "Currently open egress TCP-lane flows (hybrid mode; whole-server). 0 when hybrid is disabled or mqvpn < 0.9.0.", nil, nil)
+	descHybridFlowsTotal    = prometheus.NewDesc("mqvpn_hybrid_tcp_flows_total", "Cumulative egress TCP-lane flows opened since start (hybrid mode; whole-server; monotonic).", nil, nil)
+	descHybridFlowsRejected = prometheus.NewDesc("mqvpn_hybrid_tcp_flows_rejected_total", "Cumulative egress TCP-lane flows rejected by a cap (hybrid mode; whole-server fd-budget + per-session TcpMaxFlows cap; ACL 403s and 5xx syscall failures are not caps and are not counted).", nil, nil)
+
 	descBuildInfo = prometheus.NewDesc("mqvpn_build_info", "mqvpn build info; value is always 1.", []string{"version", "scheduler"}, nil)
 
 	descClientPaths = prometheus.NewDesc("mqvpn_client_paths",
@@ -214,6 +220,9 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 		ch <- prometheus.MustNewConstMetric(descServerDgramLost, prometheus.CounterValue, float64(serverStats.DgramLost))
 		ch <- prometheus.MustNewConstMetric(descServerDgramAcked, prometheus.CounterValue, float64(serverStats.DgramAcked))
 		ch <- prometheus.MustNewConstMetric(descServerUptime, prometheus.GaugeValue, float64(serverStats.UptimeSec))
+		ch <- prometheus.MustNewConstMetric(descHybridFlowsActive, prometheus.GaugeValue, float64(serverStats.TCPFlowsActive))
+		ch <- prometheus.MustNewConstMetric(descHybridFlowsTotal, prometheus.CounterValue, float64(serverStats.TCPFlowsTotal))
+		ch <- prometheus.MustNewConstMetric(descHybridFlowsRejected, prometheus.CounterValue, float64(serverStats.TCPFlowsRejected))
 	}
 
 	// Reorder buffer stats — server-wide aggregate (mqvpn >= 0.8.0).

@@ -601,3 +601,66 @@ func TestCollect_ReorderStats_AllZero(t *testing.T) {
 		t.Errorf("expected 17 zero-valued reorder metrics, got %d", n)
 	}
 }
+
+func TestCollect_HybridFlows_HappyPath(t *testing.T) {
+	fc := &fakeClient{
+		build:  &client.BuildInfoResponse{Version: "0.9.0", Scheduler: "wlb", FECEnabled: 0},
+		status: &client.StatusResponse{NClients: 0},
+		fecErr: client.ErrFECNotBuilt,
+		stats: &client.StatsResponse{
+			NClients: 1, BytesTx: 1, BytesRx: 2,
+			TCPFlowsActive: 3, TCPFlowsTotal: 42, TCPFlowsRejected: 5,
+		},
+	}
+	coll := New(Config{Source: fc})
+	reg := prometheus.NewRegistry()
+	reg.MustRegister(coll)
+
+	expected := `
+# HELP mqvpn_hybrid_tcp_flows_active Currently open egress TCP-lane flows (hybrid mode; whole-server). 0 when hybrid is disabled or mqvpn < 0.9.0.
+# TYPE mqvpn_hybrid_tcp_flows_active gauge
+mqvpn_hybrid_tcp_flows_active 3
+# HELP mqvpn_hybrid_tcp_flows_rejected_total Cumulative egress TCP-lane flows rejected by a cap (hybrid mode; whole-server fd-budget + per-session TcpMaxFlows cap; ACL 403s and 5xx syscall failures are not caps and are not counted).
+# TYPE mqvpn_hybrid_tcp_flows_rejected_total counter
+mqvpn_hybrid_tcp_flows_rejected_total 5
+# HELP mqvpn_hybrid_tcp_flows_total Cumulative egress TCP-lane flows opened since start (hybrid mode; whole-server; monotonic).
+# TYPE mqvpn_hybrid_tcp_flows_total counter
+mqvpn_hybrid_tcp_flows_total 42
+`
+	if err := testutil.GatherAndCompare(reg, strings.NewReader(expected),
+		"mqvpn_hybrid_tcp_flows_active", "mqvpn_hybrid_tcp_flows_total",
+		"mqvpn_hybrid_tcp_flows_rejected_total"); err != nil {
+		t.Error(err)
+	}
+}
+
+// mqvpn < 0.9.0 (or hybrid disabled): fields decode to 0 and MUST still be
+// emitted (not omitted), so dashboards show a real 0 rather than a gap.
+func TestCollect_HybridFlows_OldSchemaEmitsZero(t *testing.T) {
+	fc := &fakeClient{
+		build:  &client.BuildInfoResponse{Version: "0.8.0", Scheduler: "wlb", FECEnabled: 0},
+		status: &client.StatusResponse{NClients: 0},
+		fecErr: client.ErrFECNotBuilt,
+		stats:  &client.StatsResponse{NClients: 0}, // hybrid fields zero-valued
+	}
+	coll := New(Config{Source: fc})
+	reg := prometheus.NewRegistry()
+	reg.MustRegister(coll)
+
+	expected := `
+# HELP mqvpn_hybrid_tcp_flows_active Currently open egress TCP-lane flows (hybrid mode; whole-server). 0 when hybrid is disabled or mqvpn < 0.9.0.
+# TYPE mqvpn_hybrid_tcp_flows_active gauge
+mqvpn_hybrid_tcp_flows_active 0
+# HELP mqvpn_hybrid_tcp_flows_rejected_total Cumulative egress TCP-lane flows rejected by a cap (hybrid mode; whole-server fd-budget + per-session TcpMaxFlows cap; ACL 403s and 5xx syscall failures are not caps and are not counted).
+# TYPE mqvpn_hybrid_tcp_flows_rejected_total counter
+mqvpn_hybrid_tcp_flows_rejected_total 0
+# HELP mqvpn_hybrid_tcp_flows_total Cumulative egress TCP-lane flows opened since start (hybrid mode; whole-server; monotonic).
+# TYPE mqvpn_hybrid_tcp_flows_total counter
+mqvpn_hybrid_tcp_flows_total 0
+`
+	if err := testutil.GatherAndCompare(reg, strings.NewReader(expected),
+		"mqvpn_hybrid_tcp_flows_active", "mqvpn_hybrid_tcp_flows_total",
+		"mqvpn_hybrid_tcp_flows_rejected_total"); err != nil {
+		t.Error(err)
+	}
+}

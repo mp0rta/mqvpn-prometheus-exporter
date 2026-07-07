@@ -225,11 +225,12 @@ that mode plus update / wipe / backup operations.
 4. Select your Prometheus datasource when prompted for `DS_PROMETHEUS`.
 5. Click **Import**.
 
-The dashboard uses four rows:
+The dashboard uses five rows:
 - **Row 1 — Server Overview** (always visible): connected clients, TX/RX throughput, server loss rate, uptime, active scheduler.
 - **Row 2 — Per-User / Per-Path** (all schedulers): per-path TX, RX, SRTT, packet loss rate, paths-per-user stat.
 - **Row 3 — Backup-FEC** (collapsed by default): FEC recovery ratio, standby-path byte ratio, FEC repair packets/sec, FEC negotiated indicator. Expand only when the `backup_fec` scheduler is active.
 - **Row 4 — Reorder Buffer** (collapsed by default): delivery rate, drop rate breakdown, gap resolution, added latency. Requires mqvpn >= 0.8.0.
+- **Row 5 — Hybrid Mode (TCP lane)** (collapsed by default): active TCP-lane flows and the open / rejected flow rates. Requires mqvpn >= 0.9.0; reads 0 when hybrid mode is disabled (the default) or on older servers.
 
 ### Template variables
 
@@ -285,6 +286,18 @@ counter resets transparently.
 When mqvpn < 0.8.0 or the server does not support `get_reorder_stats`, all
 `mqvpn_reorder_*` metrics are silently omitted from `/metrics`. This is
 expected — use `unless` or `or` in PromQL rules to tolerate absent series.
+
+### 6.2b Hybrid mode — server-wide (no labels; requires mqvpn >= 0.9.0)
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `mqvpn_hybrid_tcp_flows_active` | Gauge | Currently open egress TCP-lane flows (whole-server). |
+| `mqvpn_hybrid_tcp_flows_total` | Counter | Cumulative egress TCP-lane flows opened since start (monotonic). |
+| `mqvpn_hybrid_tcp_flows_rejected_total` | Counter | Cumulative flows rejected by a cap (whole-server fd-budget + per-session `TcpMaxFlows`; ACL 403s and 5xx syscall failures are not counted). |
+
+These three fields are additive to `get_stats`, so unlike `mqvpn_reorder_*`
+they are **always emitted**: on mqvpn < 0.9.0 the fields are absent and decode
+to 0, and on v0.9.0 with hybrid mode disabled (the default) they are 0.
 
 ### 6.3 Per-client (label: `user`)
 
@@ -408,6 +421,7 @@ inspecting individual `mqvpn_path_state_info` values.
 |-----------------|---------------|-------|
 | 0.1.x | >= 0.5.0 | Requires `get_build_info` and `get_all_fec_stats` (both new in v0.5.0). The first RPC of each scrape is `get_build_info`, and its failure aborts the scrape immediately; `get_status` is the other RPC whose failure aborts the rest of the scrape. `get_stats` and `get_all_fec_stats` are non-fatal — their failures only increment `mqvpn_exporter_scrape_failures_total` and the rest of the scrape continues with a partial response. |
 | 0.2.x | >= 0.5.0; reorder metrics require >= 0.8.0 | Adds 17 `mqvpn_reorder_*` metrics from `get_reorder_stats`. On mqvpn < 0.8.0, the RPC returns `"unknown cmd"` and reorder metrics are silently omitted; the exporter functions normally otherwise. `get_build_info`, `get_stats`, `get_status`, and `get_all_fec_stats` RPCs are unchanged. |
+| 0.3.x | >= 0.5.0; reorder metrics require >= 0.8.0; hybrid metrics require >= 0.9.0 | Adds 3 `mqvpn_hybrid_tcp_flows_*` metrics from the hybrid-mode extension to `get_stats`. These are additive JSON fields, so on mqvpn < 0.9.0 they are absent and read 0 (always emitted, no version gate). All other RPCs unchanged. |
 
 **Control API stability:** the `cmd`/`ok`/`error` envelope and all existing
 field names within responses are stable across mqvpn minor and patch releases.
