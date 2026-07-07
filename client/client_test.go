@@ -116,6 +116,7 @@ func TestGetStatus_TwoClients(t *testing.T) {
 func TestGetStats_OK(t *testing.T) {
 	resp := `{"ok":true,"n_clients":2,"bytes_tx":12345,"bytes_rx":67890,
               "dgram_sent":111,"dgram_recv":110,"dgram_lost":1,"dgram_acked":109,
+              "tcp_flows_active":3,"tcp_flows_total":42,"tcp_flows_rejected":5,
               "uptime_sec":3601}`
 	addr, stop := startMock(t, resp)
 	defer stop()
@@ -127,6 +128,27 @@ func TestGetStats_OK(t *testing.T) {
 	if s.NClients != 2 || s.BytesTx != 12345 || s.UptimeSec != 3601 ||
 		s.DgramLost != 1 {
 		t.Errorf("stats: %+v", s)
+	}
+	if s.TCPFlowsActive != 3 || s.TCPFlowsTotal != 42 || s.TCPFlowsRejected != 5 {
+		t.Errorf("hybrid flows: %+v", s)
+	}
+}
+
+// Old mqvpn (< 0.9.0) omits the hybrid keys entirely; they must decode to 0,
+// which the collector then emits unconditionally (no version gate).
+func TestGetStats_OldSchemaHybridZero(t *testing.T) {
+	resp := `{"ok":true,"n_clients":1,"bytes_tx":1,"bytes_rx":2,
+              "dgram_sent":0,"dgram_recv":0,"dgram_lost":0,"dgram_acked":0,
+              "uptime_sec":10}`
+	addr, stop := startMock(t, resp)
+	defer stop()
+	c := New(addr, 2*time.Second)
+	s, err := c.GetStats(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.TCPFlowsActive != 0 || s.TCPFlowsTotal != 0 || s.TCPFlowsRejected != 0 {
+		t.Errorf("expected absent hybrid fields to decode to 0, got %+v", s)
 	}
 }
 

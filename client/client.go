@@ -144,8 +144,10 @@ func (c *Client) GetStatus(ctx context.Context) (*StatusResponse, error) {
 	return &r, nil
 }
 
-// StatsResponse — see mqvpn/docs/control-api.md §5 get_stats. The schema was
-// extended in mqvpn v0.5.0 with dgram_*/uptime_sec; old fields keep position.
+// StatsResponse — see mqvpn/docs/control-api.md §5.4 get_stats. The schema was
+// extended in mqvpn v0.5.0 with dgram_*/uptime_sec, and again in v0.9.0 with
+// the hybrid-mode tcp_flows_* counters; old fields keep position. On mqvpn
+// < 0.9.0 the tcp_flows_* keys are absent and decode to 0.
 type StatsResponse struct {
 	baseResponse
 	NClients   int    `json:"n_clients"`
@@ -155,7 +157,14 @@ type StatsResponse struct {
 	DgramRecv  uint64 `json:"dgram_recv"`
 	DgramLost  uint64 `json:"dgram_lost"`
 	DgramAcked uint64 `json:"dgram_acked"`
-	UptimeSec  uint64 `json:"uptime_sec"`
+	// Hybrid mode (mqvpn v0.9.0). Server-side these count whole-server egress
+	// TCP-lane flows; the other five hybrid get_stats fields (pkts_lane_*,
+	// raw_markers_active) are client-only and always 0 server-side, so they
+	// are intentionally not decoded here.
+	TCPFlowsActive   uint64 `json:"tcp_flows_active"`
+	TCPFlowsTotal    uint64 `json:"tcp_flows_total"`
+	TCPFlowsRejected uint64 `json:"tcp_flows_rejected"`
+	UptimeSec        uint64 `json:"uptime_sec"`
 }
 
 // GetStats issues the get_stats RPC, returning server-wide counters
