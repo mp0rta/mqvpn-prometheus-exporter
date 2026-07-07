@@ -134,8 +134,7 @@ func TestGetStats_OK(t *testing.T) {
 	}
 }
 
-// Old mqvpn (< 0.9.0) omits the hybrid keys entirely; they must decode to 0,
-// which the collector then emits unconditionally (no version gate).
+// Old mqvpn (< 0.9.0) omits the hybrid keys entirely; they must decode to 0.
 func TestGetStats_OldSchemaHybridZero(t *testing.T) {
 	resp := `{"ok":true,"n_clients":1,"bytes_tx":1,"bytes_rx":2,
               "dgram_sent":0,"dgram_recv":0,"dgram_lost":0,"dgram_acked":0,

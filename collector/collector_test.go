@@ -648,12 +648,19 @@ func TestCollect_HybridFlows_OldSchemaEmitsZero(t *testing.T) {
 	reg.MustRegister(coll)
 
 	expected := `
+# HELP mqvpn_hybrid_tcp_flows_active Currently open egress TCP-lane flows (hybrid mode; whole-server). 0 when hybrid is disabled or mqvpn < 0.9.0.
+# TYPE mqvpn_hybrid_tcp_flows_active gauge
+mqvpn_hybrid_tcp_flows_active 0
+# HELP mqvpn_hybrid_tcp_flows_rejected_total Cumulative egress TCP-lane flows rejected by a cap (hybrid mode; whole-server fd-budget + per-session TcpMaxFlows cap; ACL 403s and 5xx syscall failures are not caps and are not counted).
+# TYPE mqvpn_hybrid_tcp_flows_rejected_total counter
+mqvpn_hybrid_tcp_flows_rejected_total 0
 # HELP mqvpn_hybrid_tcp_flows_total Cumulative egress TCP-lane flows opened since start (hybrid mode; whole-server; monotonic).
 # TYPE mqvpn_hybrid_tcp_flows_total counter
 mqvpn_hybrid_tcp_flows_total 0
 `
 	if err := testutil.GatherAndCompare(reg, strings.NewReader(expected),
-		"mqvpn_hybrid_tcp_flows_total"); err != nil {
+		"mqvpn_hybrid_tcp_flows_active", "mqvpn_hybrid_tcp_flows_total",
+		"mqvpn_hybrid_tcp_flows_rejected_total"); err != nil {
 		t.Error(err)
 	}
 }

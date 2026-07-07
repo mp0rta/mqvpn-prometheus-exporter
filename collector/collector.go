@@ -220,8 +220,6 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 		ch <- prometheus.MustNewConstMetric(descServerDgramLost, prometheus.CounterValue, float64(serverStats.DgramLost))
 		ch <- prometheus.MustNewConstMetric(descServerDgramAcked, prometheus.CounterValue, float64(serverStats.DgramAcked))
 		ch <- prometheus.MustNewConstMetric(descServerUptime, prometheus.GaugeValue, float64(serverStats.UptimeSec))
-		// Hybrid mode TCP-lane flow counters (additive get_stats fields; 0 below
-		// mqvpn 0.9.0 or when hybrid is disabled).
 		ch <- prometheus.MustNewConstMetric(descHybridFlowsActive, prometheus.GaugeValue, float64(serverStats.TCPFlowsActive))
 		ch <- prometheus.MustNewConstMetric(descHybridFlowsTotal, prometheus.CounterValue, float64(serverStats.TCPFlowsTotal))
 		ch <- prometheus.MustNewConstMetric(descHybridFlowsRejected, prometheus.CounterValue, float64(serverStats.TCPFlowsRejected))
