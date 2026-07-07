@@ -49,9 +49,14 @@ troubleshooting).
 
 ## Compatibility
 
-| Exporter | mqvpn       |
-|----------|-------------|
-| 0.1.x    | ≥ 0.5.0     |
+| Exporter | mqvpn                              |
+|----------|-----------------------------------|
+| 0.1.x    | ≥ 0.5.0                           |
+| 0.2.x    | ≥ 0.5.0 (reorder metrics ≥ 0.8.0) |
+
+On mqvpn < 0.8.0 the `mqvpn_reorder_*` metrics are silently omitted; the
+exporter functions normally otherwise. See the [compatibility notes](docs/README.md#9-mqvpn-version-compatibility)
+for RPC-level detail.
 
 ## License
 
