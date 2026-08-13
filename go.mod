@@ -2,7 +2,7 @@ module github.com/mp0rta/mqvpn-prometheus-exporter
 
 go 1.25.0
 
-toolchain go1.26.4
+toolchain go1.26.5
 
 require github.com/prometheus/client_golang v1.23.2
 
