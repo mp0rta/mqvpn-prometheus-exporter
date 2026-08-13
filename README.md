@@ -61,7 +61,8 @@ On mqvpn < 0.8.0 the `mqvpn_reorder_*` metrics are silently omitted; the
 exporter functions normally otherwise. The `mqvpn_hybrid_*` metrics are
 additive `get_stats` fields, so on mqvpn < 0.9.0 they read 0 rather than being
 omitted. The `mqvpn_udp_*` pair and `mqvpn_path_reinject_tx_bytes_total` are
-likewise additive (mqvpn ≥ 0.16.0 / ≥ 0.15.0) and read 0 on older servers.
+likewise additive (mqvpn ≥ 0.16.0 / ≥ 0.15.0) and read 0 on older servers
+(the per-path reinject series exists only while a client is connected).
 See the [compatibility notes](docs/README.md#9-mqvpn-version-compatibility)
 for RPC-level detail.
 
