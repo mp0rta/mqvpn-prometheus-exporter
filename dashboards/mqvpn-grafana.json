@@ -400,6 +400,7 @@
       "id": 16,
       "type": "timeseries",
       "title": "Per-Path Reinject Rate",
+      "description": "Bytes/sec speculatively duplicated onto each path by reinjection ([Multipath] Reinjection). Flat 0 when reinjection is off or on mqvpn < 0.15.0.",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "x": 0, "y": 23, "w": 12, "h": 7 },
       "options": {
@@ -416,7 +417,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "rate(mqvpn_path_reinject_tx_bytes_total{user=~\"$user\"}[1m])",
+          "expr": "rate(mqvpn_path_reinject_tx_bytes_total{user=~\"$user\"}[$__rate_interval])",
           "legendFormat": "{{user}} path={{path_id}}",
           "refId": "A"
         }
@@ -426,6 +427,7 @@
       "id": 17,
       "type": "timeseries",
       "title": "Reinjection Overhead %",
+      "description": "Share of each path's TX bytes that is reinjection duplicate traffic. 0 when reinjection is off or on mqvpn < 0.15.0.",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "x": 12, "y": 23, "w": 12, "h": 7 },
       "options": {
@@ -444,7 +446,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "100 * rate(mqvpn_path_reinject_tx_bytes_total{user=~\"$user\"}[1m]) / rate(mqvpn_path_bytes_tx_total{user=~\"$user\"}[1m])",
+          "expr": "100 * rate(mqvpn_path_reinject_tx_bytes_total{user=~\"$user\"}[$__rate_interval]) / clamp_min(rate(mqvpn_path_bytes_tx_total{user=~\"$user\"}[$__rate_interval]), 1)",
           "legendFormat": "{{user}} path={{path_id}}",
           "refId": "A"
         }
@@ -961,7 +963,12 @@
               "unit": "pps",
               "custom": { "lineInterpolation": "linear", "showPoints": "never" }
             },
-            "overrides": []
+            "overrides": [
+              {
+                "matcher": { "id": "byFrameRefID", "options": "A" },
+                "properties": [{ "id": "unit", "value": "cps" }]
+              }
+            ]
           },
           "targets": [
             {
