@@ -427,7 +427,7 @@
       "id": 17,
       "type": "timeseries",
       "title": "Reinjection Overhead %",
-      "description": "Share of each path's TX bytes that is reinjection duplicate traffic. 0 when reinjection is off; gap when the path is idle; no data on mqvpn < 0.15.0.",
+      "description": "Share of each path's TX bytes that is reinjection duplicate traffic. 0 when reinjection is off or on mqvpn < 0.15.0; gap when the path is idle.",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "x": 12, "y": 23, "w": 12, "h": 7 },
       "options": {

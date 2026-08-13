@@ -421,7 +421,11 @@ inspecting individual `mqvpn_path_state_info` values.
 - **Per-path counters** (`mqvpn_path_*_total`, including
   `mqvpn_path_reinject_tx_bytes_total`) are per-session: they reset when the
   client reconnects and their series disappear while the client is offline.
-  Guard alerting rules on these series with `absent()` or `or vector(0)`.
+  Alerting rules on these series need a guard against per-session
+  disappearance: aggregate label-free (`sum(rate(...)) or vector(0)`) or pin
+  a selector (`absent(mqvpn_path_reinject_tx_bytes_total{user="alice"})`) —
+  a bare `or vector(0)` injects a labelless series that breaks routing, and
+  a bare `absent()` fires only when every client is offline.
 - **Use `rate()` for throughput**, e.g. `rate(mqvpn_server_bytes_tx_total[1m])`.
   PromQL's `rate()` handles counter resets transparently.
 - **FEC counters** (`fec_send_cnt`, `fec_recover_cnt`) are uint32 widened to
