@@ -45,7 +45,8 @@ troubleshooting).
 - [`examples/systemd/`](examples/systemd/) — systemd unit for the exporter
 - [`examples/prometheus.yml`](examples/prometheus.yml) — sample scrape config
 - [`dashboards/mqvpn-grafana.json`](dashboards/mqvpn-grafana.json) — bundled
-  Grafana dashboard (server overview, per-user / per-path, backup-FEC)
+  Grafana dashboard (six rows: server overview, per-user / per-path,
+  backup-FEC, reorder buffer, hybrid TCP lane, UDP offload)
 
 ## Compatibility
 
@@ -53,7 +54,8 @@ troubleshooting).
 |----------|-------------------------------------------|
 | 0.1.0    | ≥ 0.5.0                                   |
 | 0.2.0    | ≥ 0.5.0 (reorder metrics ≥ 0.8.0)         |
-| 0.3.0    | ≥ 0.5.0 (reorder ≥ 0.8.0, hybrid ≥ 0.9.0, reinject ≥ 0.15.0, udp offload ≥ 0.16.0) |
+| 0.3.0    | ≥ 0.5.0 (reorder ≥ 0.8.0, hybrid ≥ 0.9.0) |
+| 0.4.0    | ≥ 0.5.0 (reorder ≥ 0.8.0, hybrid ≥ 0.9.0, reinject ≥ 0.15.0, udp offload ≥ 0.16.0) |
 
 On mqvpn < 0.8.0 the `mqvpn_reorder_*` metrics are silently omitted; the
 exporter functions normally otherwise. The `mqvpn_hybrid_*` metrics are

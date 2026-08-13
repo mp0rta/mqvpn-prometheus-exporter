@@ -23,7 +23,7 @@ import (
 // (see .goreleaser.yaml). Default is "0.3.0-dev" so that `go install`-style
 // builds without the ldflags override surface as a dev build in
 // mqvpn_exporter_build_info{version=...}, distinguishable from a tagged GA.
-var exporterVersion = "0.3.0-dev"
+var exporterVersion = "0.4.0-dev"
 
 func main() {
 	var (

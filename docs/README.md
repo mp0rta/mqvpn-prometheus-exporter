@@ -417,6 +417,9 @@ inspecting individual `mqvpn_path_state_info` values.
 - **All `*_total` counters** start at 0 when `mqvpn_server_create()` is called
   and reset to 0 on server restart. The `bytes_tx`/`bytes_rx` client-level
   counters additionally reset when a client reconnects (new session).
+- **Per-path counters** (`mqvpn_path_*_total`, including
+  `mqvpn_path_reinject_tx_bytes_total`) are per-session: they reset when the
+  client reconnects and their series disappear while the client is offline.
 - **Use `rate()` for throughput**, e.g. `rate(mqvpn_server_bytes_tx_total[1m])`.
   PromQL's `rate()` handles counter resets transparently.
 - **FEC counters** (`fec_send_cnt`, `fec_recover_cnt`) are uint32 widened to
@@ -444,7 +447,8 @@ inspecting individual `mqvpn_path_state_info` values.
 |-----------------|---------------|-------|
 | 0.1.0 | >= 0.5.0 | Requires `get_build_info` and `get_all_fec_stats` (both new in v0.5.0). The first RPC of each scrape is `get_build_info`, and its failure aborts the scrape immediately; `get_status` is the other RPC whose failure aborts the rest of the scrape. `get_stats` and `get_all_fec_stats` are non-fatal — their failures only increment `mqvpn_exporter_scrape_failures_total` and the rest of the scrape continues with a partial response. |
 | 0.2.0 | >= 0.5.0; reorder metrics require >= 0.8.0 | Adds 17 `mqvpn_reorder_*` metrics from `get_reorder_stats`. On mqvpn < 0.8.0, the RPC returns `"unknown cmd"` and reorder metrics are silently omitted; the exporter functions normally otherwise. `get_build_info`, `get_stats`, `get_status`, and `get_all_fec_stats` RPCs are unchanged. |
-| 0.3.0 | >= 0.5.0; reorder metrics require >= 0.8.0; hybrid metrics require >= 0.9.0; reinject metric requires >= 0.15.0; UDP offload metrics require >= 0.16.0 | Adds 3 `mqvpn_hybrid_tcp_flows_*` metrics (get_stats, v0.9.0), `mqvpn_path_reinject_tx_bytes_total` (get_status path objects, v0.15.0), and the direction-labeled `mqvpn_udp_syscalls_total` / `mqvpn_udp_datagrams_total` pair (get_stats, v0.16.0). All are additive JSON fields: absent on older mqvpn and read 0 (always emitted, no version gate). All other RPCs unchanged. |
+| 0.3.0 | >= 0.5.0; reorder metrics require >= 0.8.0; hybrid metrics require >= 0.9.0 | Adds 3 `mqvpn_hybrid_tcp_flows_*` metrics from the hybrid-mode extension to `get_stats`. These are additive JSON fields, so on mqvpn < 0.9.0 they are absent and read 0 (always emitted, no version gate). All other RPCs unchanged. |
+| 0.4.0 | >= 0.5.0; reorder metrics require >= 0.8.0; hybrid metrics require >= 0.9.0; reinject metric requires >= 0.15.0; UDP offload metrics require >= 0.16.0 | Adds `mqvpn_path_reinject_tx_bytes_total` (get_status path objects, v0.15.0) and the direction-labeled `mqvpn_udp_syscalls_total` / `mqvpn_udp_datagrams_total` pair (get_stats, v0.16.0). The UDP pair is additive to get_stats: absent on older mqvpn and reads 0 (always emitted, no version gate). The per-path reinject metric is emitted per connected path — it reads 0 per path on older mqvpn or with reinjection off, and the series is absent entirely when no client is connected (or get_status fails); alerting rules should guard with absent()/or vector(0). All other RPCs unchanged. |
 
 **Control API stability:** the `cmd`/`ok`/`error` envelope and all existing
 field names within responses are stable across mqvpn minor and patch releases.
