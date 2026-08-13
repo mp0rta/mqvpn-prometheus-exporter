@@ -92,19 +92,21 @@ func (c *Client) GetBuildInfo(ctx context.Context) (*BuildInfoResponse, error) {
 // PathStats — see mqvpn/docs/control-api.md §5 get_status, paths array.
 // `StateLabel` was added in mqvpn v0.5.0; older servers do not return it and
 // the field decodes to the empty string.
+// `ReinjectTxBytes` was added in mqvpn v0.15.0; absent → 0 on older servers.
 type PathStats struct {
-	PathID     uint64 `json:"path_id"`
-	SRTTMs     uint64 `json:"srtt_ms"`
-	MinRTTMs   uint64 `json:"min_rtt_ms"`
-	Cwnd       uint64 `json:"cwnd"`
-	InFlight   uint64 `json:"in_flight"`
-	BytesTx    uint64 `json:"bytes_tx"`
-	BytesRx    uint64 `json:"bytes_rx"`
-	PktSent    uint64 `json:"pkt_sent"`
-	PktRecv    uint64 `json:"pkt_recv"`
-	PktLost    uint64 `json:"pkt_lost"`
-	State      uint8  `json:"state"`
-	StateLabel string `json:"state_label"`
+	PathID          uint64 `json:"path_id"`
+	SRTTMs          uint64 `json:"srtt_ms"`
+	MinRTTMs        uint64 `json:"min_rtt_ms"`
+	Cwnd            uint64 `json:"cwnd"`
+	InFlight        uint64 `json:"in_flight"`
+	BytesTx         uint64 `json:"bytes_tx"`
+	BytesRx         uint64 `json:"bytes_rx"`
+	PktSent         uint64 `json:"pkt_sent"`
+	PktRecv         uint64 `json:"pkt_recv"`
+	PktLost         uint64 `json:"pkt_lost"`
+	State           uint8  `json:"state"`
+	StateLabel      string `json:"state_label"`
+	ReinjectTxBytes uint64 `json:"reinject_tx_bytes"`
 }
 
 // Info is one element of StatusResponse.Clients — a per-session snapshot
@@ -146,8 +148,9 @@ func (c *Client) GetStatus(ctx context.Context) (*StatusResponse, error) {
 
 // StatsResponse — see mqvpn/docs/control-api.md §5.4 get_stats. The schema was
 // extended in mqvpn v0.5.0 with dgram_*/uptime_sec, and again in v0.9.0 with
-// the hybrid-mode tcp_flows_* counters; old fields keep position. On mqvpn
-// < 0.9.0 the tcp_flows_* keys are absent and decode to 0.
+// the hybrid-mode tcp_flows_* counters, and again in v0.16.0 with the outer-UDP
+// offload counters; old fields keep position. On older mqvpn the newer keys
+// are absent and decode to 0.
 type StatsResponse struct {
 	baseResponse
 	NClients   int    `json:"n_clients"`
@@ -164,7 +167,15 @@ type StatsResponse struct {
 	TCPFlowsActive   uint64 `json:"tcp_flows_active"`
 	TCPFlowsTotal    uint64 `json:"tcp_flows_total"`
 	TCPFlowsRejected uint64 `json:"tcp_flows_rejected"`
-	UptimeSec        uint64 `json:"uptime_sec"`
+	// Outer-UDP offload counters (mqvpn v0.16.0). datagrams/sends and
+	// datagrams/receives are the achieved GSO batching / GRO coalescing
+	// factors; the collector emits the raw counters and dashboards compute
+	// the ratio via rate().
+	UDPTxSends     uint64 `json:"udp_tx_sends"`
+	UDPTxDatagrams uint64 `json:"udp_tx_datagrams"`
+	UDPRxReceives  uint64 `json:"udp_rx_receives"`
+	UDPRxDatagrams uint64 `json:"udp_rx_datagrams"`
+	UptimeSec      uint64 `json:"uptime_sec"`
 }
 
 // GetStats issues the get_stats RPC, returning server-wide counters
