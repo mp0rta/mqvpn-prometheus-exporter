@@ -92,7 +92,8 @@ func TestGetStatus_TwoClients(t *testing.T) {
          "bytes_tx":1000,"bytes_rx":2000,
          "paths":[{"path_id":0,"srtt_ms":31,"min_rtt_ms":18,"cwnd":196608,
                    "in_flight":1024,"bytes_tx":900,"bytes_rx":1900,
-                   "pkt_sent":50,"pkt_recv":49,"pkt_lost":1,"state":0}]},
+                   "pkt_sent":50,"pkt_recv":49,"pkt_lost":1,"state":0,
+                   "reinject_tx_bytes":77}]},
         {"user":"bob","endpoint":"5.6.7.8:443","connected_sec":10,
          "bytes_tx":50,"bytes_rx":80,"paths":[]}]}`
 	addr, stop := startMock(t, resp)
@@ -111,12 +112,38 @@ func TestGetStatus_TwoClients(t *testing.T) {
 	if s.Clients[0].Paths[0].PathID != 0 || s.Clients[0].Paths[0].SRTTMs != 31 {
 		t.Errorf("alice path[0]: %+v", s.Clients[0].Paths[0])
 	}
+	if s.Clients[0].Paths[0].ReinjectTxBytes != 77 {
+		t.Errorf("reinject_tx_bytes: %+v", s.Clients[0].Paths[0])
+	}
+}
+
+// Old mqvpn (< 0.15.0) omits reinject_tx_bytes; it must decode to 0.
+func TestGetStatus_OldSchemaReinjectZero(t *testing.T) {
+	resp := `{"ok":true,"n_clients":1,"clients":[
+        {"user":"alice","endpoint":"1.2.3.4:443","connected_sec":42,
+         "bytes_tx":1000,"bytes_rx":2000,
+         "paths":[{"path_id":0,"srtt_ms":31,"min_rtt_ms":18,"cwnd":196608,
+                   "in_flight":1024,"bytes_tx":900,"bytes_rx":1900,
+                   "pkt_sent":50,"pkt_recv":49,"pkt_lost":1,"state":0}]}]}`
+	addr, stop := startMock(t, resp)
+	defer stop()
+	c := New(addr, 2*time.Second)
+	s, err := c.GetStatus(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Clients[0].Paths[0].ReinjectTxBytes != 0 {
+		t.Errorf("expected absent reinject_tx_bytes to decode to 0, got %+v",
+			s.Clients[0].Paths[0])
+	}
 }
 
 func TestGetStats_OK(t *testing.T) {
 	resp := `{"ok":true,"n_clients":2,"bytes_tx":12345,"bytes_rx":67890,
               "dgram_sent":111,"dgram_recv":110,"dgram_lost":1,"dgram_acked":109,
               "tcp_flows_active":3,"tcp_flows_total":42,"tcp_flows_rejected":5,
+              "udp_tx_sends":611,"udp_tx_datagrams":6110,
+              "udp_rx_receives":722,"udp_rx_datagrams":7220,
               "uptime_sec":3601}`
 	addr, stop := startMock(t, resp)
 	defer stop()
@@ -131,6 +158,10 @@ func TestGetStats_OK(t *testing.T) {
 	}
 	if s.TCPFlowsActive != 3 || s.TCPFlowsTotal != 42 || s.TCPFlowsRejected != 5 {
 		t.Errorf("hybrid flows: %+v", s)
+	}
+	if s.UDPTxSends != 611 || s.UDPTxDatagrams != 6110 ||
+		s.UDPRxReceives != 722 || s.UDPRxDatagrams != 7220 {
+		t.Errorf("udp offload: %+v", s)
 	}
 }
 
@@ -148,6 +179,10 @@ func TestGetStats_OldSchemaHybridZero(t *testing.T) {
 	}
 	if s.TCPFlowsActive != 0 || s.TCPFlowsTotal != 0 || s.TCPFlowsRejected != 0 {
 		t.Errorf("expected absent hybrid fields to decode to 0, got %+v", s)
+	}
+	if s.UDPTxSends != 0 || s.UDPTxDatagrams != 0 ||
+		s.UDPRxReceives != 0 || s.UDPRxDatagrams != 0 {
+		t.Errorf("expected absent udp fields to decode to 0, got %+v", s)
 	}
 }
 

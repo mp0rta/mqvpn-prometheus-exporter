@@ -225,12 +225,17 @@ that mode plus update / wipe / backup operations.
 4. Select your Prometheus datasource when prompted for `DS_PROMETHEUS`.
 5. Click **Import**.
 
-The dashboard uses five rows:
+The dashboard uses six rows:
 - **Row 1 — Server Overview** (always visible): connected clients, TX/RX throughput, server loss rate, uptime, active scheduler.
-- **Row 2 — Per-User / Per-Path** (all schedulers): per-path TX, RX, SRTT, packet loss rate, paths-per-user stat.
+- **Row 2 — Per-User / Per-Path** (all schedulers): per-path TX, RX, SRTT, packet loss rate, paths-per-user stat, per-path reinject rate and reinjection overhead % (mqvpn >= 0.15.0; 0 when reinjection is off).
 - **Row 3 — Backup-FEC** (collapsed by default): FEC recovery ratio, standby-path byte ratio, FEC repair packets/sec, FEC negotiated indicator. Expand only when the `backup_fec` scheduler is active.
 - **Row 4 — Reorder Buffer** (collapsed by default): delivery rate, drop rate breakdown, gap resolution, added latency. Requires mqvpn >= 0.8.0.
 - **Row 5 — Hybrid Mode (TCP lane)** (collapsed by default): active TCP-lane flows and the open / rejected flow rates. Requires mqvpn >= 0.9.0; reads 0 when hybrid mode is disabled (the default) or on older servers.
+- **Row 6 — UDP Offload (GSO/GRO)** (collapsed by default): achieved TX
+  batching / RX coalescing factors (1.0 baseline = one syscall per datagram)
+  and raw syscall/datagram rates. Requires mqvpn >= 0.16.0; the factor panels
+  show gaps (NaN) when idle or on older servers, while the rate panel reads a
+  flat 0.
 
 ### Template variables
 
@@ -299,6 +304,24 @@ These three fields are additive to `get_stats`, so unlike `mqvpn_reorder_*`
 they are **always emitted**: on mqvpn < 0.9.0 the fields are absent and decode
 to 0, and on v0.9.0 with hybrid mode disabled (the default) they are 0.
 
+### 6.2c UDP offload — server-wide (label: `direction`; requires mqvpn >= 0.16.0)
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `mqvpn_udp_syscalls_total` | Counter | Outer-UDP send/receive syscalls that moved at least one datagram, by `direction="tx"\|"rx"`. |
+| `mqvpn_udp_datagrams_total` | Counter | Outer-UDP datagrams moved, by direction. |
+
+The achieved offload factor per direction (1.0 = one syscall per datagram,
+i.e. `UdpGso`/`UdpGro` disabled or ineffective):
+
+```promql
+  rate(mqvpn_udp_datagrams_total{direction="tx"}[5m])
+/ rate(mqvpn_udp_syscalls_total{direction="tx"}[5m])
+```
+
+Like the hybrid fields these are additive to `get_stats` and **always
+emitted**: on mqvpn < 0.16.0 they are absent and decode to 0.
+
 ### 6.3 Per-client (label: `user`)
 
 | Metric | Type | Description |
@@ -323,6 +346,7 @@ to 0, and on v0.9.0 with hybrid mode disabled (the default) they are 0.
 | `mqvpn_path_pkt_sent_total` | Counter | QUIC packets sent on this path. |
 | `mqvpn_path_pkt_recv_total` | Counter | QUIC packets received on this path. |
 | `mqvpn_path_pkt_lost_total` | Counter | QUIC packets declared lost on this path. |
+| `mqvpn_path_reinject_tx_bytes_total` | Counter | Bytes speculatively duplicated onto this path by reinjection (mqvpn >= 0.15.0; 0 when reinjection is off or on older servers). |
 | `mqvpn_path_state_info` | Gauge (1) | xquic transport path state as a label; value always 1. Extra label `state` is one of `init`, `validating`, `active`, `closing`, `closed`, `unknown` (see §7). |
 
 ### 6.5 Per-client FEC (label: `user`; requires `backup_fec` scheduler + FEC build)
@@ -394,6 +418,14 @@ inspecting individual `mqvpn_path_state_info` values.
 - **All `*_total` counters** start at 0 when `mqvpn_server_create()` is called
   and reset to 0 on server restart. The `bytes_tx`/`bytes_rx` client-level
   counters additionally reset when a client reconnects (new session).
+- **Per-path counters** (`mqvpn_path_*_total`, including
+  `mqvpn_path_reinject_tx_bytes_total`) are per-session: they reset when the
+  client reconnects and their series disappear while the client is offline.
+  Alerting rules on these series need a guard against per-session
+  disappearance: aggregate label-free (`sum(rate(...)) or vector(0)`) or pin
+  a selector (`absent(mqvpn_path_reinject_tx_bytes_total{user="alice"})`) —
+  a bare `or vector(0)` injects a labelless series that breaks routing, and
+  a bare `absent()` fires only when every client is offline.
 - **Use `rate()` for throughput**, e.g. `rate(mqvpn_server_bytes_tx_total[1m])`.
   PromQL's `rate()` handles counter resets transparently.
 - **FEC counters** (`fec_send_cnt`, `fec_recover_cnt`) are uint32 widened to
@@ -422,6 +454,7 @@ inspecting individual `mqvpn_path_state_info` values.
 | 0.1.0 | >= 0.5.0 | Requires `get_build_info` and `get_all_fec_stats` (both new in v0.5.0). The first RPC of each scrape is `get_build_info`, and its failure aborts the scrape immediately; `get_status` is the other RPC whose failure aborts the rest of the scrape. `get_stats` and `get_all_fec_stats` are non-fatal — their failures only increment `mqvpn_exporter_scrape_failures_total` and the rest of the scrape continues with a partial response. |
 | 0.2.0 | >= 0.5.0; reorder metrics require >= 0.8.0 | Adds 17 `mqvpn_reorder_*` metrics from `get_reorder_stats`. On mqvpn < 0.8.0, the RPC returns `"unknown cmd"` and reorder metrics are silently omitted; the exporter functions normally otherwise. `get_build_info`, `get_stats`, `get_status`, and `get_all_fec_stats` RPCs are unchanged. |
 | 0.3.0 | >= 0.5.0; reorder metrics require >= 0.8.0; hybrid metrics require >= 0.9.0 | Adds 3 `mqvpn_hybrid_tcp_flows_*` metrics from the hybrid-mode extension to `get_stats`. These are additive JSON fields, so on mqvpn < 0.9.0 they are absent and read 0 (always emitted, no version gate). All other RPCs unchanged. |
+| 0.4.0 | >= 0.5.0; reorder metrics require >= 0.8.0; hybrid metrics require >= 0.9.0; reinject metric requires >= 0.15.0; UDP offload metrics require >= 0.16.0 | Adds `mqvpn_path_reinject_tx_bytes_total` (get_status path objects, v0.15.0) and the direction-labeled `mqvpn_udp_syscalls_total` / `mqvpn_udp_datagrams_total` pair (get_stats, v0.16.0). Both are additive: absent on older mqvpn, read 0. The per-path reinject series is absent when no client is connected. All other RPCs unchanged. |
 
 **Control API stability:** the `cmd`/`ok`/`error` envelope and all existing
 field names within responses are stable across mqvpn minor and patch releases.

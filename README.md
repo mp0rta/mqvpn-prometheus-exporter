@@ -45,7 +45,8 @@ troubleshooting).
 - [`examples/systemd/`](examples/systemd/) — systemd unit for the exporter
 - [`examples/prometheus.yml`](examples/prometheus.yml) — sample scrape config
 - [`dashboards/mqvpn-grafana.json`](dashboards/mqvpn-grafana.json) — bundled
-  Grafana dashboard (server overview, per-user / per-path, backup-FEC)
+  Grafana dashboard (six rows: server overview, per-user / per-path,
+  backup-FEC, reorder buffer, hybrid TCP lane, UDP offload)
 
 ## Compatibility
 
@@ -54,11 +55,15 @@ troubleshooting).
 | 0.1.0    | ≥ 0.5.0                                   |
 | 0.2.0    | ≥ 0.5.0 (reorder metrics ≥ 0.8.0)         |
 | 0.3.0    | ≥ 0.5.0 (reorder ≥ 0.8.0, hybrid ≥ 0.9.0) |
+| 0.4.0    | ≥ 0.5.0 (reorder ≥ 0.8.0, hybrid ≥ 0.9.0, reinject ≥ 0.15.0, udp offload ≥ 0.16.0) |
 
 On mqvpn < 0.8.0 the `mqvpn_reorder_*` metrics are silently omitted; the
 exporter functions normally otherwise. The `mqvpn_hybrid_*` metrics are
 additive `get_stats` fields, so on mqvpn < 0.9.0 they read 0 rather than being
-omitted. See the [compatibility notes](docs/README.md#9-mqvpn-version-compatibility)
+omitted. The `mqvpn_udp_*` pair and `mqvpn_path_reinject_tx_bytes_total` are
+likewise additive (mqvpn ≥ 0.16.0 / ≥ 0.15.0) and read 0 on older servers
+(the per-path reinject series exists only while a client is connected).
+See the [compatibility notes](docs/README.md#9-mqvpn-version-compatibility)
 for RPC-level detail.
 
 ## License
