@@ -136,6 +136,14 @@ var (
 	descHybridFlowsTotal    = prometheus.NewDesc("mqvpn_hybrid_tcp_flows_total", "Cumulative egress TCP-lane flows opened since start (hybrid mode; whole-server; monotonic).", nil, nil)
 	descHybridFlowsRejected = prometheus.NewDesc("mqvpn_hybrid_tcp_flows_rejected_total", "Cumulative egress TCP-lane flows rejected by a cap (hybrid mode; whole-server fd-budget + per-session TcpMaxFlows cap; ACL 403s and 5xx syscall failures are not caps and are not counted).", nil, nil)
 
+	// UDP offload (GSO/GRO) — server-wide from get_stats (mqvpn >= 0.16.0).
+	descUDPSyscalls = prometheus.NewDesc("mqvpn_udp_syscalls_total",
+		"Outer-UDP send/receive syscalls that moved at least one datagram, by direction. Reads 0 on mqvpn < 0.16.0.",
+		[]string{"direction"}, nil)
+	descUDPDatagrams = prometheus.NewDesc("mqvpn_udp_datagrams_total",
+		"Outer-UDP datagrams moved, by direction. rate(datagrams)/rate(syscalls) per direction is the achieved GSO batching (tx) / GRO coalescing (rx) factor; 1.0 = one syscall per datagram (offload disabled or ineffective).",
+		[]string{"direction"}, nil)
+
 	descBuildInfo = prometheus.NewDesc("mqvpn_build_info", "mqvpn build info; value is always 1.", []string{"version", "scheduler"}, nil)
 
 	descClientPaths = prometheus.NewDesc("mqvpn_client_paths",
@@ -161,15 +169,18 @@ var (
 		"xquic multipath state as a label; value always 1. State is one of single_path, active_with_standby, standby_only, active_only, unknown.",
 		[]string{"user", "state"}, nil)
 
-	descPathSRTT      = prometheus.NewDesc("mqvpn_path_srtt_seconds", "Smoothed RTT.", []string{"user", "path_id"}, nil)
-	descPathMinRTT    = prometheus.NewDesc("mqvpn_path_min_rtt_seconds", "Minimum observed RTT.", []string{"user", "path_id"}, nil)
-	descPathCwnd      = prometheus.NewDesc("mqvpn_path_cwnd_bytes", "Congestion window.", []string{"user", "path_id"}, nil)
-	descPathInFlight  = prometheus.NewDesc("mqvpn_path_in_flight_bytes", "Bytes in flight.", []string{"user", "path_id"}, nil)
-	descPathBytesTx   = prometheus.NewDesc("mqvpn_path_bytes_tx_total", "Bytes sent on this path.", []string{"user", "path_id"}, nil)
-	descPathBytesRx   = prometheus.NewDesc("mqvpn_path_bytes_rx_total", "Bytes received on this path.", []string{"user", "path_id"}, nil)
-	descPathPktSent   = prometheus.NewDesc("mqvpn_path_pkt_sent_total", "Packets sent on this path.", []string{"user", "path_id"}, nil)
-	descPathPktRecv   = prometheus.NewDesc("mqvpn_path_pkt_recv_total", "Packets received on this path.", []string{"user", "path_id"}, nil)
-	descPathPktLost   = prometheus.NewDesc("mqvpn_path_pkt_lost_total", "Packets lost on this path.", []string{"user", "path_id"}, nil)
+	descPathSRTT          = prometheus.NewDesc("mqvpn_path_srtt_seconds", "Smoothed RTT.", []string{"user", "path_id"}, nil)
+	descPathMinRTT        = prometheus.NewDesc("mqvpn_path_min_rtt_seconds", "Minimum observed RTT.", []string{"user", "path_id"}, nil)
+	descPathCwnd          = prometheus.NewDesc("mqvpn_path_cwnd_bytes", "Congestion window.", []string{"user", "path_id"}, nil)
+	descPathInFlight      = prometheus.NewDesc("mqvpn_path_in_flight_bytes", "Bytes in flight.", []string{"user", "path_id"}, nil)
+	descPathBytesTx       = prometheus.NewDesc("mqvpn_path_bytes_tx_total", "Bytes sent on this path.", []string{"user", "path_id"}, nil)
+	descPathBytesRx       = prometheus.NewDesc("mqvpn_path_bytes_rx_total", "Bytes received on this path.", []string{"user", "path_id"}, nil)
+	descPathPktSent       = prometheus.NewDesc("mqvpn_path_pkt_sent_total", "Packets sent on this path.", []string{"user", "path_id"}, nil)
+	descPathPktRecv       = prometheus.NewDesc("mqvpn_path_pkt_recv_total", "Packets received on this path.", []string{"user", "path_id"}, nil)
+	descPathPktLost       = prometheus.NewDesc("mqvpn_path_pkt_lost_total", "Packets lost on this path.", []string{"user", "path_id"}, nil)
+	descPathReinjectBytes = prometheus.NewDesc("mqvpn_path_reinject_tx_bytes_total",
+		"Cumulative bytes speculatively duplicated onto this path by reinjection. 0 when reinjection is off or mqvpn < 0.15.0.",
+		[]string{"user", "path_id"}, nil)
 	descPathStateInfo = prometheus.NewDesc("mqvpn_path_state_info",
 		"xquic per-path transport state as a label; value always 1. State is one of init, validating, active, closing, closed, unknown.",
 		[]string{"user", "path_id", "state"}, nil)
@@ -223,6 +234,10 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 		ch <- prometheus.MustNewConstMetric(descHybridFlowsActive, prometheus.GaugeValue, float64(serverStats.TCPFlowsActive))
 		ch <- prometheus.MustNewConstMetric(descHybridFlowsTotal, prometheus.CounterValue, float64(serverStats.TCPFlowsTotal))
 		ch <- prometheus.MustNewConstMetric(descHybridFlowsRejected, prometheus.CounterValue, float64(serverStats.TCPFlowsRejected))
+		ch <- prometheus.MustNewConstMetric(descUDPSyscalls, prometheus.CounterValue, float64(serverStats.UDPTxSends), "tx")
+		ch <- prometheus.MustNewConstMetric(descUDPSyscalls, prometheus.CounterValue, float64(serverStats.UDPRxReceives), "rx")
+		ch <- prometheus.MustNewConstMetric(descUDPDatagrams, prometheus.CounterValue, float64(serverStats.UDPTxDatagrams), "tx")
+		ch <- prometheus.MustNewConstMetric(descUDPDatagrams, prometheus.CounterValue, float64(serverStats.UDPRxDatagrams), "rx")
 	}
 
 	// Reorder buffer stats — server-wide aggregate (mqvpn >= 0.8.0).
@@ -327,6 +342,8 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 				float64(p.PktRecv), ci.User, pid)
 			ch <- prometheus.MustNewConstMetric(descPathPktLost, prometheus.CounterValue,
 				float64(p.PktLost), ci.User, pid)
+			ch <- prometheus.MustNewConstMetric(descPathReinjectBytes, prometheus.CounterValue,
+				float64(p.ReinjectTxBytes), ci.User, pid)
 			// Fall back to the numeric state if state_label is absent (older
 			// mqvpn that has not been bumped to v0.5.0). The mqvpn-prometheus-
 			// exporter ≥ 0.1 documents v0.5.0 as the supported floor, so this

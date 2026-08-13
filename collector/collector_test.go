@@ -664,3 +664,81 @@ mqvpn_hybrid_tcp_flows_total 0
 		t.Error(err)
 	}
 }
+
+func TestCollect_UDPOffloadReinject_HappyPath(t *testing.T) {
+	fc := &fakeClient{
+		build: &client.BuildInfoResponse{Version: "0.16.0", Scheduler: "wlb", FECEnabled: 0},
+		stats: &client.StatsResponse{
+			NClients: 1, UDPTxSends: 6, UDPTxDatagrams: 60,
+			UDPRxReceives: 7, UDPRxDatagrams: 63,
+		},
+		status: &client.StatusResponse{NClients: 1, Clients: []client.Info{{
+			User: "alice",
+			Paths: []client.PathStats{{
+				PathID: 0, BytesTx: 900, StateLabel: "active",
+				ReinjectTxBytes: 5,
+			}},
+		}}},
+		fecErr: client.ErrFECNotBuilt,
+	}
+	coll := New(Config{Source: fc})
+	reg := prometheus.NewRegistry()
+	reg.MustRegister(coll)
+
+	expected := `
+# HELP mqvpn_path_reinject_tx_bytes_total Cumulative bytes speculatively duplicated onto this path by reinjection. 0 when reinjection is off or mqvpn < 0.15.0.
+# TYPE mqvpn_path_reinject_tx_bytes_total counter
+mqvpn_path_reinject_tx_bytes_total{path_id="0",user="alice"} 5
+# HELP mqvpn_udp_datagrams_total Outer-UDP datagrams moved, by direction. rate(datagrams)/rate(syscalls) per direction is the achieved GSO batching (tx) / GRO coalescing (rx) factor; 1.0 = one syscall per datagram (offload disabled or ineffective).
+# TYPE mqvpn_udp_datagrams_total counter
+mqvpn_udp_datagrams_total{direction="rx"} 63
+mqvpn_udp_datagrams_total{direction="tx"} 60
+# HELP mqvpn_udp_syscalls_total Outer-UDP send/receive syscalls that moved at least one datagram, by direction. Reads 0 on mqvpn < 0.16.0.
+# TYPE mqvpn_udp_syscalls_total counter
+mqvpn_udp_syscalls_total{direction="rx"} 7
+mqvpn_udp_syscalls_total{direction="tx"} 6
+`
+	if err := testutil.GatherAndCompare(reg, strings.NewReader(expected),
+		"mqvpn_udp_syscalls_total", "mqvpn_udp_datagrams_total",
+		"mqvpn_path_reinject_tx_bytes_total"); err != nil {
+		t.Error(err)
+	}
+}
+
+// Old mqvpn: UDP fields decode to 0 and MUST still be emitted; the per-path
+// reinject metric emits 0 for every existing path (it is absent only when
+// the path itself is absent). The fixture therefore carries one client with
+// one real path — with no paths the per-path pin would pass vacuously.
+func TestCollect_UDPOffloadReinject_OldSchemaEmitsZero(t *testing.T) {
+	fc := &fakeClient{
+		build: &client.BuildInfoResponse{Version: "0.14.0", Scheduler: "wlb", FECEnabled: 0},
+		stats: &client.StatsResponse{NClients: 1}, // udp fields zero-valued
+		status: &client.StatusResponse{NClients: 1, Clients: []client.Info{{
+			User:  "alice",
+			Paths: []client.PathStats{{PathID: 0, StateLabel: "active"}},
+		}}},
+		fecErr: client.ErrFECNotBuilt,
+	}
+	coll := New(Config{Source: fc})
+	reg := prometheus.NewRegistry()
+	reg.MustRegister(coll)
+
+	expected := `
+# HELP mqvpn_path_reinject_tx_bytes_total Cumulative bytes speculatively duplicated onto this path by reinjection. 0 when reinjection is off or mqvpn < 0.15.0.
+# TYPE mqvpn_path_reinject_tx_bytes_total counter
+mqvpn_path_reinject_tx_bytes_total{path_id="0",user="alice"} 0
+# HELP mqvpn_udp_datagrams_total Outer-UDP datagrams moved, by direction. rate(datagrams)/rate(syscalls) per direction is the achieved GSO batching (tx) / GRO coalescing (rx) factor; 1.0 = one syscall per datagram (offload disabled or ineffective).
+# TYPE mqvpn_udp_datagrams_total counter
+mqvpn_udp_datagrams_total{direction="rx"} 0
+mqvpn_udp_datagrams_total{direction="tx"} 0
+# HELP mqvpn_udp_syscalls_total Outer-UDP send/receive syscalls that moved at least one datagram, by direction. Reads 0 on mqvpn < 0.16.0.
+# TYPE mqvpn_udp_syscalls_total counter
+mqvpn_udp_syscalls_total{direction="rx"} 0
+mqvpn_udp_syscalls_total{direction="tx"} 0
+`
+	if err := testutil.GatherAndCompare(reg, strings.NewReader(expected),
+		"mqvpn_udp_syscalls_total", "mqvpn_udp_datagrams_total",
+		"mqvpn_path_reinject_tx_bytes_total"); err != nil {
+		t.Error(err)
+	}
+}
