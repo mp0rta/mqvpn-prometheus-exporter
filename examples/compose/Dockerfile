@@ -5,7 +5,7 @@
 # examples/systemd/mqvpn-exporter.service is an alternative for Docker-free
 # hosts (see docs/README.md §4.2).
 
-FROM golang:1.26-alpine AS build
+FROM golang:1.27-alpine AS build
 WORKDIR /src
 
 # Cache module downloads in their own layer.
